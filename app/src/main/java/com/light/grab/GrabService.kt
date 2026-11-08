@@ -9,6 +9,8 @@ import android.content.Intent
 import android.graphics.Color
 import android.graphics.Path
 import android.graphics.Rect
+import android.os.Handler
+import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Toast
@@ -25,6 +27,7 @@ class GrabService : AccessibilityService() {
 
     private var lastClick = 0L
     private var pending = false
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -34,8 +37,9 @@ class GrabService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        mainHandler.removeCallbacksAndMessages(null)
         instance = null
-        notifyStatus(running = false)   // 停止时换成红点提示
+        notifyStatus(running = false)
         super.onDestroy()
     }
 
@@ -52,19 +56,18 @@ class GrabService : AccessibilityService() {
                 )
             }
             val b = Notification.Builder(this, CH_ID)
-                .setSmallIcon(android.R.drawable.presence_online)   // 系统自带小圆点图标
+                .setSmallIcon(android.R.drawable.presence_online)
                 .setContentTitle(if (running) "🟢 运行中" else "🔴 已停止")
                 .setOngoing(running)
                 .setShowWhen(false)
                 .setPriority(Notification.PRIORITY_MIN)
             if (running) {
-                b.setColor(Color.rgb(0, 200, 120))   // 薄荷绿
+                b.setColor(Color.rgb(0, 200, 120))
                 b.setAutoCancel(false)
             } else {
-                b.setColor(Color.rgb(220, 60, 60))   // 红
-                b.setAutoCancel(true)                // 红条用户可划走
+                b.setColor(Color.rgb(220, 60, 60))
+                b.setAutoCancel(true)
             }
-            // 点击跳到本 App 界面
             val pi = PendingIntent.getActivity(
                 this, 0,
                 Intent(this, Class.forName("com.light.grab.MainActivity")),
@@ -77,10 +80,20 @@ class GrabService : AccessibilityService() {
 
     override fun onAccessibilityEvent(e: AccessibilityEvent?) {
         val pkg = e?.packageName?.toString() ?: return
-
         if (pkg != Config.targetPkg) return
-        if (pending) return
-        if (System.currentTimeMillis() - lastClick < 399) return
+        detect()   // 只负责「发现」，点击交给 doClick 内部排队
+    }
+
+    /** 检测弹窗；若在锁定(pending/冷却)期内则安排延时复查，事件不再丢失 */
+    private fun detect(): Boolean {
+        if (pending) {
+            scheduleRecheck()
+            return false
+        }
+        if (System.currentTimeMillis() - lastClick < 300) {
+            scheduleRecheck()
+            return false
+        }
 
         val roots = ArrayList<AccessibilityNodeInfo?>()
         try { roots.add(rootInActiveWindow) } catch (ex: Exception) {}
@@ -94,13 +107,22 @@ class GrabService : AccessibilityService() {
             }
             if (hit != null) break
         }
-        if (hit == null) return
+        if (hit == null) return false
 
         log("🔥 发现弹窗[$hit]，延迟点击...")
         pending = true
 
         val delay = Random.nextLong(Config.delayMin.toLong(), Config.delayMax.toLong() + 1)
         Thread { Thread.sleep(delay); doClick() }.start()
+        return true
+    }
+
+    /** 延时补扫：把被闸门挡掉的弹窗抓回来（最多重试 3 次，防无限循环） */
+    private fun scheduleRecheck() {
+        if (pending) return   // 已在处理中，无需补
+        mainHandler.postDelayed({
+            if (!pending) detect()
+        }, 250)
     }
 
     private fun doClick() {
@@ -137,6 +159,11 @@ class GrabService : AccessibilityService() {
 
         log(if (done) "点[$hitBtnKw] 完成 ✅" else "⚠️ 未找到按钮 ${Config.btnKeywords}")
         pending = false
+
+        // ★ 核心补丁：点完立刻安排 250ms 后主动复查，不等顺丰下一次事件
+        if (done) {
+            mainHandler.postDelayed({ detect() }, 250)
+        }
     }
 
     private fun findByText(root: AccessibilityNodeInfo, text: String): Boolean {
