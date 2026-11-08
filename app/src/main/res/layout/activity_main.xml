@@ -13,7 +13,7 @@
         android:layout_height="wrap_content"
         android:orientation="vertical"
         android:padding="12dp"
-        android:background="#E8F5E9">
+        android:background="@color/bg_off">
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -27,7 +27,7 @@
                 android:layout_height="wrap_content"
                 android:text="● 已停止"
                 android:textSize="16sp" android:textStyle="bold"
-                android:textColor="#C62828"
+                android:textColor="@color/red_off"
                 android:fontFamily="monospace" />
 
             <ImageButton android:id="@+id/btnStart"
@@ -64,7 +64,8 @@
         android:layout_marginTop="12dp">
 
         <TextView style="@style/Glabel" android:text="目标应用" />
-        <EditText android:id="@+id/etPkg" style="@style/Ginput"/>
+        <EditText android:id="@+id/etPkg" style="@style/Ginput"
+            android:hint="@string/pkg_hint"/>
         <Button android:id="@+id/btnPick"
             android:layout_width="match_parent" android:layout_height="40dp"
             android:layout_marginTop="4dp"
@@ -73,10 +74,12 @@
             android:textColor="#1565C0" android:textSize="13sp" />
 
         <TextView style="@style/Glabel" android:text="弹窗关键词（逗号分隔）" />
-        <EditText android:id="@+id/etDialog" style="@style/Ginput"/>
+        <EditText android:id="@+id/etDialog" style="@style/Ginput"
+            android:hint="@string/dialog_hint"/>
 
         <TextView style="@style/Glabel" android:text="按钮关键词（逗号分隔）" />
-        <EditText android:id="@+id/etBtn" style="@style/Ginput"/>
+        <EditText android:id="@+id/etBtn" style="@style/Ginput"
+            android:hint="@string/btn_hint"/>
     </LinearLayout>
 
     <!-- ③ 日志区（约48%） -->
@@ -89,7 +92,7 @@
         android:id="@+id/logScroll"
         android:layout_width="match_parent"
         android:layout_height="0dp" android:layout_weight="48"
-        android:background="#1E1E1E"
+        android:background="@color/log_bg"
         android:padding="8dp">
 
         <TextView
