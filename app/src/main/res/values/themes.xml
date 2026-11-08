@@ -1,7 +1,8 @@
 <resources>
-    <!-- 极简主题：无标题栏，浅色背景 -->
+    <!-- 极简主题：无标题栏，背景深浅自动跟随系统 -->
     <style name="Theme.LightGrab" parent="android:Theme.Material.Light.NoActionBar">
-        <item name="android:windowBackground">#FAFAFA</item>
+        <item name="android:windowBackground">@color/page_bg</item>
+        <item name="android:windowLightStatusBar">true</item>
     </style>
 
     <!-- 界面小样式：分组标题 / 输入框 -->
@@ -9,7 +10,7 @@
         <item name="android:layout_width">wrap_content</item>
         <item name="android:layout_height">wrap_content</item>
         <item name="android:textSize">12sp</item>
-        <item name="android:textColor">#777777</item>
+        <item name="android:textColor">@color/text_hint</item>
         <item name="android:layout_marginTop">10dp</item>
     </style>
 
@@ -22,5 +23,7 @@
         <item name="android:textSize">14sp</item>
         <item name="android:fontFamily">monospace</item>
         <item name="android:singleLine">true</item>
+        <item name="android:textColor">@color/log_text</item>
+        <item name="android:textColorHint">@color/text_hint</item>
     </style>
 </resources>
