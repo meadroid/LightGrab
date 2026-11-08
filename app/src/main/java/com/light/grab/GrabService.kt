@@ -13,6 +13,7 @@ import android.os.Handler
 import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.widget.Toast
 import java.util.Random
 
 class GrabService : AccessibilityService() {
@@ -27,69 +28,68 @@ class GrabService : AccessibilityService() {
     private var lastClick = 0L
     private var pending = false
     private var pendingAt = 0L
+    private var lastReport = 0L
+
+    private fun report(msg: String) {
+        // 同一秒只报一次，避免刷屏
+        val now = System.currentTimeMillis()
+        if (now - lastReport < 1000) return
+        lastReport = now
+        try { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() } catch (e: Exception) {}
+    }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         running = true
-        // 所有启动逻辑全部兜底 —— 这里抛任何异常服务都会被系统判"故障"
-        try {
-            startForeground(1, buildNotice())
-        } catch (e: Exception) { e.printStackTrace() }
-        try {
-            startForegroundService(Intent(this, FloatService::class.java))
-        } catch (e: Exception) { e.printStackTrace() }
+        try { startForeground(1, buildNotice()) } catch (e: Exception) {}
+        try { startForegroundService(Intent(this, FloatService::class.java)) } catch (e: Exception) {}
         handler.postDelayed(watchdog, 2000)
     }
 
-    // 看门狗：每 2 秒自检，pending 超 3 秒强制复位，防装死
     private val watchdog = object : Runnable {
         override fun run() {
-            try {
-                if (pending && System.currentTimeMillis() - pendingAt > 3000) {
-                    pending = false
-                }
-            } catch (e: Exception) { }
+            if (pending && System.currentTimeMillis() - pendingAt > 3000) pending = false
             if (running) handler.postDelayed(this, 2000)
         }
     }
 
-    /** 收集目标应用的所有窗口根节点（含弹窗），全部兼容低版本 */
     private fun targetRoots(): List<AccessibilityNodeInfo> {
         val roots = ArrayList<AccessibilityNodeInfo>()
         try {
-            val w = windows ?: return roots
-            for (win in w) {
-                try {
-                    val r = win.root ?: continue
-                    if (r.packageName?.toString() == Config.targetPkg) roots.add(r)
-                } catch (e: Exception) { }
+            windows?.forEach { w ->
+                try { w.root?.let { roots.add(it) } } catch (e: Exception) {}
             }
-        } catch (e: Exception) { }
-        // 兜底：当前活动窗口（去重，避免和上面重复也无所谓，查词而已）
-        try {
-            rootInActiveWindow?.let { roots.add(it) }
-        } catch (e: Exception) { }
+        } catch (e: Exception) {}
+        try { rootInActiveWindow?.let { roots.add(it) } } catch (e: Exception) {}
         return roots
     }
 
     override fun onAccessibilityEvent(e: AccessibilityEvent?) {
         try {
             if (!running || e == null) return
-            if (e.packageName?.toString() != Config.targetPkg) return
+
+            val pkg = e.packageName?.toString() ?: return
+
+            // 调试报告：看到谁的事件、配置的目标是谁
+            if (pkg != Config.targetPkg) {
+                report("事件来自[$pkg]，目标[${Config.targetPkg}]，不匹配")
+                return
+            }
             if (e.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
                 e.eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) return
             if (pending) return
 
             val roots = targetRoots()
-            if (roots.isEmpty()) return
+            if (roots.isEmpty()) { report("拿不到窗口节点"); return }
 
-            val hit = roots.any { r ->
-                Config.dialogKeywords.any { kw -> findByText(r, kw) }
+            val hitKw = Config.dialogKeywords.firstOrNull { kw ->
+                roots.any { r -> findByText(r, kw) }
             }
-            if (!hit) return
+            if (hitKw == null) return
 
+            report("发现弹窗关键词[$hitKw]，准备点击")
             val now = System.currentTimeMillis()
-            if (now - lastClick < 2000) return
+            if (now - lastClick < 2000) { report("距上次点击太近，跳过"); return }
 
             pending = true
             pendingAt = now
@@ -101,19 +101,18 @@ class GrabService : AccessibilityService() {
         }
     }
 
-    // 找按钮重试 5 次×80ms；点中即停，绝不重复点
     private fun tryClickWithRetry(attempt: Int) {
         try {
             if (!running) { pending = false; return }
 
             val roots = targetRoots()
             var btn: AccessibilityNodeInfo? = null
-            for (kw in Config.btnKeywords) {
+            var hitBtnKw: String? = null
+            outer@ for (kw in Config.btnKeywords) {
                 for (r in roots) {
                     btn = findClickable(r, kw)
-                    if (btn != null) break
+                    if (btn != null) { hitBtnKw = kw; break@outer }
                 }
-                if (btn != null) break
             }
 
             if (btn != null) {
@@ -121,6 +120,7 @@ class GrabService : AccessibilityService() {
                 btn.getBoundsInScreen(rect)
                 btn.recycle()
                 lastClick = System.currentTimeMillis()
+                report("点[$hitBtnKw] @${rect.centerX()},${rect.centerY()}")
                 scatterClick(rect)
                 pending = false
                 return
@@ -129,6 +129,7 @@ class GrabService : AccessibilityService() {
             if (attempt < 4) {
                 handler.postDelayed({ tryClickWithRetry(attempt + 1) }, 80)
             } else {
+                report("重试5次没找到按钮")
                 pending = false
             }
         } catch (e: Exception) {
@@ -161,9 +162,7 @@ class GrabService : AccessibilityService() {
         if (root == null) return null
         return try {
             val list = root.findAccessibilityNodeInfosByText(p) ?: return null
-            // 先找自身可点击的
             for (n in list) if (n.isClickable) return n
-            // 再向上找可点击的父节点
             for (n in list) {
                 var cur: AccessibilityNodeInfo? = n.parent
                 var hops = 0
