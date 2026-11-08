@@ -1,4 +1,4 @@
-package com.light.grab   // ← 和你的 Config.kt 第一行保持一致
+package com.light.grab
 
 import android.accessibilityservice.AccessibilityService
 import android.graphics.Path
@@ -12,117 +12,90 @@ class GrabService : AccessibilityService() {
 
     companion object {
         @Volatile var instance: GrabService? = null
-        @Volatile var running = false   // ← 补：悬浮球 FloatService 靠它变色
+        @Volatile var running = false   // FloatService 悬浮球靠它变色
     }
 
     private var lastClick = 0L
     private var pending = false
-    private var lastDebugReport = 0L
+    private var lastPkgToast = 0L
+
+    // Toast 总开关：测试期 true，确认能用后改 false 全静音
+    private val DEBUG = true
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        running = true                  // ← 补：启动时点亮浮球
+        running = true
         report("服务已启动")
     }
 
     override fun onDestroy() {
         instance = null
-        running = false                 // ← 补：停止时浮球变灰
+        running = false
         super.onDestroy()
     }
 
     override fun onInterrupt() {}
 
-    override fun onAccessibilityEvent(e: AccessibilityEvent) {
-        val pkg = e.packageName?.toString() ?: return
+    override fun onAccessibilityEvent(e: AccessibilityEvent?) {
+        val pkg = e?.packageName?.toString() ?: return
 
-        // ---- 包名过滤 ----
-        if (pkg != Config.targetPkg) {
-            report("[$pkg] 不匹配")
-            return
+        // ---- 探针1：报告每个事件来源（DEBUG期专用）----
+        if (DEBUG && System.currentTimeMillis() - lastPkgToast > 5000) {
+            lastPkgToast = System.currentTimeMillis()
+            report("事件来源: $pkg")
         }
 
-        val now = System.currentTimeMillis()
-
-        // ===== 诊断1：顺丰事件进来了就报，3秒限一次 =====
-        if (now - lastDebugReport > 3000) {
-            lastDebugReport = now
-            report("✅顺丰事件 type=${e.eventType}")
-        }
-        // ===== 诊断1结束 =====
-
+        if (pkg != Config.targetPkg) return   // 非顺丰，静默跳过
         if (pending) return
-        if (now - lastClick < 3000) return   // 点击后3秒内防抖
+        if (System.currentTimeMillis() - lastClick < 3000) return
 
         // ---- 收集所有窗口根节点 ----
         val roots = ArrayList<AccessibilityNodeInfo?>()
         try { roots.add(rootInActiveWindow) } catch (ex: Exception) {}
         try { windows?.forEach { w -> roots.add(w.root) } } catch (ex: Exception) {}
 
-        // ---- 弹窗关键词命中检测（列表里任意一个词命中即触发）----
-        var hitDialogKw: String? = null
+        // ---- 弹窗关键词检测 ----
+        var hit: String? = null
         for (root in roots) {
             if (root == null) continue
             for (kw in Config.dialogKeywords) {
-                if (findByText(root, kw)) {
-                    hitDialogKw = kw
-                    break
-                }
+                if (findByText(root, kw)) { hit = kw; break }
             }
-            if (hitDialogKw != null) break
+            if (hit != null) break
         }
+        if (hit == null) return
 
-        if (hitDialogKw == null) return
-
-        // ===== 诊断2：报告哪个窗口命中了 =====
-        try {
-            val sb = StringBuilder("窗口:")
-            roots.forEachIndexed { i, r ->
-                val hit = r?.let { rr ->
-                    Config.dialogKeywords.any { findByText(rr, it) }
-                } ?: false
-                sb.append("$i=${if (hit) "✓" else if (r == null) "空" else "×"};")
-            }
-            report(sb.toString())
-        } catch (ex: Exception) {}
-        // ===== 诊断2结束 =====
-
-        report("发现弹窗关键词[$hitDialogKw]")
+        report("发现弹窗关键词[$hit]")
         pending = true
 
-        // ---- 随机延迟后点击 ----
         val delay = Random.nextLong(Config.delayMin.toLong(), Config.delayMax.toLong() + 1)
-        Thread {
-            Thread.sleep(delay)
-            doClick()
-        }.start()
+        Thread { Thread.sleep(delay); doClick() }.start()
     }
 
-    // ---------- 点击：5次重试，节点点击+手势双保险 ----------
+    // ---------- 点击：5次重试，节点点击+手势兜底 ----------
 
     private fun doClick() {
         var done = false
         var hitBtnKw = ""
         try {
-            val roots = ArrayList<AccessibilityNodeInfo?>()
-            try { roots.add(rootInActiveWindow) } catch (ex: Exception) {}
-            try { windows?.forEach { w -> roots.add(w.root) } } catch (ex: Exception) {}
-
             for (i in 1..5) {
+                val roots = ArrayList<AccessibilityNodeInfo?>()
+                try { roots.add(rootInActiveWindow) } catch (ex: Exception) {}
+                try { windows?.forEach { w -> roots.add(w.root) } } catch (ex: Exception) {}
+
                 outer@ for (root in roots) {
                     if (root == null) continue
                     for (kw in Config.btnKeywords) {
-                        val nodes = root.findAccessibilityNodeInfosByText(kw)
+                        val nodes = try { root.findAccessibilityNodeInfosByText(kw) } catch (ex: Exception) { null }
                         if (nodes != null && nodes.isNotEmpty()) {
-                            val btn = nodes[nodes.size - 1]   // 按钮一般在列表最后
+                            val btn = nodes[nodes.size - 1]
                             val rect = Rect()
                             btn.getBoundsInScreen(rect)
                             lastClick = System.currentTimeMillis()
                             var ok = false
                             try { ok = btn.performAction(AccessibilityNodeInfo.ACTION_CLICK) } catch (ex: Exception) {}
                             if (!ok) { try { scatterClick(rect) } catch (ex: Exception) {} }
-                            try { btn.recycle() } catch (ex: Exception) {}
                             done = true
                             hitBtnKw = kw
                             break@outer
@@ -134,16 +107,12 @@ class GrabService : AccessibilityService() {
             }
         } catch (ex: Exception) {}
 
-        if (done) {
-            report("点[$hitBtnKw] 完成")
-        } else {
-            report("没找到按钮${Config.btnKeywords}")
-        }
+        report(if (done) "点[$hitBtnKw] 完成✅" else "没找到按钮${Config.btnKeywords}")
         pending = false
     }
 
     private fun findByText(root: AccessibilityNodeInfo, text: String): Boolean {
-        val nodes = root.findAccessibilityNodeInfosByText(text)
+        val nodes = try { root.findAccessibilityNodeInfosByText(text) } catch (ex: Exception) { null }
         return nodes != null && nodes.isNotEmpty()
     }
 
@@ -158,6 +127,7 @@ class GrabService : AccessibilityService() {
     }
 
     private fun report(msg: String) {
-        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+        if (!DEBUG) return
+        try { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() } catch (ex: Exception) {}
     }
 }
