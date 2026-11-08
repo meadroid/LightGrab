@@ -12,7 +12,6 @@ class GrabService : AccessibilityService() {
 
     companion object {
         @Volatile var instance: GrabService? = null
-        // 日志钩子：MainActivity 注册后，服务日志直接显示到界面日志区
         @Volatile var logHook: ((String) -> Unit)? = null
     }
 
@@ -37,7 +36,8 @@ class GrabService : AccessibilityService() {
 
         if (pkg != Config.targetPkg) return   // 非目标应用，静默跳过
         if (pending) return
-        if (System.currentTimeMillis() - lastClick < 3000) return
+        // 冷却只防"同一个弹窗连点"，压到 600ms，新弹窗几乎立即响应
+        if (System.currentTimeMillis() - lastClick < 399) return
 
         // ---- 收集所有窗口根节点 ----
         val roots = ArrayList<AccessibilityNodeInfo?>()
@@ -62,7 +62,7 @@ class GrabService : AccessibilityService() {
         Thread { Thread.sleep(delay); doClick() }.start()
     }
 
-    // ---------- 点击：5次重试，节点点击+手势兜底 ----------
+    // ---------- 点击：重试找按钮，节点点击+手势兜底 ----------
 
     private fun doClick() {
         var done = false
@@ -92,7 +92,7 @@ class GrabService : AccessibilityService() {
                     }
                 }
                 if (done) break
-                Thread.sleep(200)
+                Thread.sleep(100)
             }
         } catch (ex: Exception) {}
 
@@ -115,7 +115,6 @@ class GrabService : AccessibilityService() {
         dispatchGesture(gesture, null, null)
     }
 
-    /** 日志：优先写界面日志区，App 不在前台时退回 Toast（保证手机上能看到） */
     private fun log(msg: String) {
         val hook = logHook
         if (hook != null) { try { hook(msg) } catch (ex: Exception) {} }
