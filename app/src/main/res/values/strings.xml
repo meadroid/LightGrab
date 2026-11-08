@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">轻单助手</string>
+    <string name="service_desc">自动点击二次确认弹窗，仅限指定应用</string>
+    <string name="pkg_hint">目标应用包名（默认美团骑手）</string>
+</resources>
