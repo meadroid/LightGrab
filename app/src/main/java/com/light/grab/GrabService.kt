@@ -20,16 +20,12 @@ class GrabService : AccessibilityService() {
     companion object {
         const val CH_ID = "grab"
         @Volatile var running = false
-        @Volatile var targetPkg = "com.sfexpress.knight"          // 电子围栏：顺丰同城骑士
-        @Volatile var dialogKeywords: List<String> = listOf("立即上门单")  // 弹窗标题特征词
-        @Volatile var btnKeywords: List<String> = listOf("确认抢单")        // 按钮文字
-        @Volatile var maxDelay = 200   // 随机延迟上限(ms)，下限固定100
     }
 
     private val rand = Random()
     private val handler = Handler(Looper.getMainLooper())
     private var lastClick = 0L
-    private var pending = false   // 防抖：已安排点击时不再重复安排
+    private var pending = false
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -40,39 +36,37 @@ class GrabService : AccessibilityService() {
 
     override fun onAccessibilityEvent(e: AccessibilityEvent?) {
         if (!running || e == null) return
-        // 围栏：用事件自带包名，100%准确，不依赖窗口切换
-        if (e.packageName?.toString() != targetPkg) return
+        // 围栏：实时从 Config 读包名，改目标应用立即生效
+        if (e.packageName?.toString() != Config.targetPkg) return
         if (e.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
             e.eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) return
-        if (pending) return   // 已经在处理一次弹窗，忽略后续事件
+        if (pending) return
 
-        // 关键改动①：遍历所有窗口（能看到 Dialog 弹窗），不只 rootInActiveWindow
-        val sfWindows = windows.filter { it.packageName == targetPkg }
+        val sfWindows = windows.filter { it.packageName == Config.targetPkg }
         if (sfWindows.isEmpty()) return
 
-        // 弹窗特征：任一关键词命中即算（在任何顺丰窗口里找）
+        // 触发词实时从 Config 读，命中任意一个即算
         val hit = sfWindows.any { w ->
-            dialogKeywords.any { kw -> findByText(w.root, kw) }
+            Config.dialogKeywords.any { kw -> findByText(w.root, kw) }
         }
         if (!hit) return
 
         val now = System.currentTimeMillis()
         if (now - lastClick < 2000) return
 
-        // 关键改动②：短随机延迟 100~200ms，事件驱动下总耗时≈120~250ms
         pending = true
-        handler.postDelayed({
-            tryClickWithRetry(0)
-        }, (100 + rand.nextInt(maxDelay.coerceAtLeast(101) - 100)).toLong())
+        // 延迟实时从 Config 读（100~200 默认，界面可调 50~3000）
+        val delay = Config.delayMin + rand.nextInt(
+            (Config.delayMax - Config.delayMin).coerceAtLeast(1))
+        handler.postDelayed({ tryClickWithRetry(0) }, delay.toLong())
     }
 
-    // 关键改动③：找按钮重试 5 次，每次间隔 80ms；点中即停，绝不重复点
+    // 找按钮重试 5 次，每次 80ms；点中即停
     private fun tryClickWithRetry(attempt: Int) {
         if (!running) { pending = false; return }
 
-        // 双保险围栏：点击前再验一次，只认顺丰的窗口
-        val sfWindows = windows.filter { it.packageName == targetPkg }
-        val btn = btnKeywords.firstNotNullOfOrNull { kw ->
+        val sfWindows = windows.filter { it.packageName == Config.targetPkg }
+        val btn = Config.btnKeywords.firstNotNullOfOrNull { kw ->
             sfWindows.firstNotNullOfOrNull { w -> findClickable(w.root, kw) }
         }
 
@@ -82,13 +76,13 @@ class GrabService : AccessibilityService() {
             lastClick = System.currentTimeMillis()
             scatterClick(r)
             pending = false
-            return   // ← 点中即返回，不会点第二次
+            return
         }
 
         if (attempt < 4) {
             handler.postDelayed({ tryClickWithRetry(attempt + 1) }, 80)
         } else {
-            pending = false   // 5 次都没找到（弹窗可能已关闭），放弃
+            pending = false
         }
     }
 
@@ -114,7 +108,6 @@ class GrabService : AccessibilityService() {
         if (root == null) return null
         return try {
             root.findAccessibilityNodeInfosByText(p)?.firstOrNull { it.isClickable }
-                // 按钮本身不可点击时，向上找可点击的父节点
                 ?: root.findAccessibilityNodeInfosByText(p)?.firstOrNull { n ->
                     var cur = n.parent
                     while (cur != null) {
