@@ -25,7 +25,6 @@
         <service android:name=".GrabService"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
             android:exported="false"
-            android:foregroundServiceType="accessibility">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService"/>
             </intent-filter>
