@@ -20,13 +20,13 @@ class MainActivity : AppCompatActivity() {
 
         val pkg = findViewById<EditText>(R.id.pkg).apply {
             setText(getSharedPreferences("cfg", MODE_PRIVATE)
-                .getString("pkg", "com.sdu.didi.psnger"))
+                .getString("pkg", GrabService.targetPkg))
         }
         findViewById<Button>(R.id.go).setOnClickListener {
-            // 保存包名 → 依次引导三项权限
+            val p = pkg.text.toString().trim()
             getSharedPreferences("cfg", MODE_PRIVATE)
-                .edit().putString("pkg", pkg.text.toString().trim()).apply()
-            GrabService.targetPkg = pkg.text.toString().trim()
+                .edit().putString("pkg", p).apply()
+            GrabService.targetPkg = p
 
             when {
                 !accessibilityOn(this) -> startActivity(
