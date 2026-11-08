@@ -31,8 +31,13 @@ class GrabService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         running = true
-        startForeground(1, buildNotice())
-        startService(Intent(this, FloatService::class.java))
+        // 所有启动逻辑全部兜底 —— 这里抛任何异常服务都会被系统判"故障"
+        try {
+            startForeground(1, buildNotice())
+        } catch (e: Exception) { e.printStackTrace() }
+        try {
+            startForegroundService(Intent(this, FloatService::class.java))
+        } catch (e: Exception) { e.printStackTrace() }
         handler.postDelayed(watchdog, 2000)
     }
 
