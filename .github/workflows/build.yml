@@ -18,8 +18,10 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: 授权 gradlew
-        run: chmod +x gradlew
+      - name: 修复 gradlew 换行符和权限
+        run: |
+          sed -i 's/\r$//' gradlew
+          chmod +x gradlew
 
       - name: 打包 Debug APK（自动带签名）
         run: ./gradlew assembleDebug --no-daemon
