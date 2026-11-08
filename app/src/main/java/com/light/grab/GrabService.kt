@@ -12,6 +12,7 @@ class GrabService : AccessibilityService() {
 
     companion object {
         @Volatile var instance: GrabService? = null
+        @Volatile var running = false   // ← 补：悬浮球 FloatService 靠它变色
     }
 
     private var lastClick = 0L
@@ -21,11 +22,13 @@ class GrabService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        running = true                  // ← 补：启动时点亮浮球
         report("服务已启动")
     }
 
     override fun onDestroy() {
         instance = null
+        running = false                 // ← 补：停止时浮球变灰
         super.onDestroy()
     }
 
