@@ -12,47 +12,54 @@ object Config {
     private const val FILE = "lightgrab_config"
     private var sp: SharedPreferences? = null
 
-    // ---- 可自定义项（全部可在 App 界面改）----
-    @Volatile var targetPkg: String = "com.sfexpress.knight"      // 目标应用包名
-    @Volatile var dialogKeywords: List<String> = listOf("立即上门单")  // 触发词，多个用逗号隔开
-    @Volatile var btnKeywords: List<String> = listOf("确认抢单")      // 按钮词，多个用逗号隔开
-    @Volatile var delayMin: Int = 100   // 延迟下限 ms
-    @Volatile var delayMax: Int = 200   // 延迟上限 ms
+    // ---- 内部存储（私有，外部只通过 setXxx 修改）----
+    private var _targetPkg: String = "com.sfexpress.knight"
+    private var _dialogKeywords: List<String> = listOf("立即上门单")
+    private var _btnKeywords: List<String> = listOf("确认抢单")
+    private var _delayMin: Int = 100
+    private var _delayMax: Int = 200
+
+    // ---- 只读访问（GrabService 直接读这些）----
+    val targetPkg: String get() = _targetPkg
+    val dialogKeywords: List<String> get() = _dialogKeywords
+    val btnKeywords: List<String> get() = _btnKeywords
+    val delayMin: Int get() = _delayMin
+    val delayMax: Int get() = _delayMax
 
     fun init(context: Context) {
         val s = context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
         sp = s
-        targetPkg      = s.getString("targetPkg", targetPkg) ?: targetPkg
-        dialogKeywords = split(s.getString("dialogKeywords", join(dialogKeywords)) ?: join(dialogKeywords))
-        btnKeywords    = split(s.getString("btnKeywords", join(btnKeywords)) ?: join(btnKeywords))
-        delayMin       = s.getInt("delayMin", delayMin)
-        delayMax       = s.getInt("delayMax", delayMax)
+        _targetPkg      = s.getString("targetPkg", _targetPkg) ?: _targetPkg
+        _dialogKeywords = split(s.getString("dialogKeywords", join(_dialogKeywords)) ?: join(_dialogKeywords))
+        _btnKeywords    = split(s.getString("btnKeywords", join(_btnKeywords)) ?: join(_btnKeywords))
+        _delayMin       = s.getInt("delayMin", _delayMin)
+        _delayMax       = s.getInt("delayMax", _delayMax)
     }
 
     // ---------- MainActivity 调用这些方法保存设置 ----------
 
     fun setTargetPkg(pkg: String) {
-        targetPkg = pkg.trim()
-        sp?.edit()?.putString("targetPkg", targetPkg)?.apply()
+        _targetPkg = pkg.trim()
+        sp?.edit()?.putString("targetPkg", _targetPkg)?.apply()
     }
 
     /** 输入"立即上门单,需及时上门" → 自动拆成两个词，命中任意一个就触发 */
     fun setDialogKeywords(text: String) {
-        dialogKeywords = split(text)
-        sp?.edit()?.putString("dialogKeywords", join(dialogKeywords))?.apply()
+        _dialogKeywords = split(text)
+        sp?.edit()?.putString("dialogKeywords", join(_dialogKeywords))?.apply()
     }
 
     /** 输入"确认抢单,立即抢单" → 自动拆成两个词 */
     fun setBtnKeywords(text: String) {
-        btnKeywords = split(text)
-        sp?.edit()?.putString("btnKeywords", join(btnKeywords))?.apply()
+        _btnKeywords = split(text)
+        sp?.edit()?.putString("btnKeywords", join(_btnKeywords))?.apply()
     }
 
     /** 延迟范围，单位 ms。自动保证 max > min、min >= 50 */
     fun setDelay(min: Int, max: Int) {
-        delayMin = min.coerceIn(50, 2000)
-        delayMax = max.coerceIn(delayMin + 10, 3000)
-        sp?.edit()?.putInt("delayMin", delayMin)?.putInt("delayMax", delayMax)?.apply()
+        _delayMin = min.coerceIn(50, 2000)
+        _delayMax = max.coerceIn(_delayMin + 10, 3000)
+        sp?.edit()?.putInt("delayMin", _delayMin)?.putInt("delayMax", _delayMax)?.apply()
     }
 
     // ---------- 工具 ----------
