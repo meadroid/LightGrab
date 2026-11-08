@@ -1,199 +1,160 @@
-package com.light.grab
+package com.light.grab   // ← 和你的 Config.kt 第一行保持一致
 
 import android.accessibilityservice.AccessibilityService
-import android.accessibilityservice.GestureDescription
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
-import android.content.Intent
 import android.graphics.Path
 import android.graphics.Rect
-import android.os.Handler
-import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Toast
-import java.util.Random
+import kotlin.random.Random
 
 class GrabService : AccessibilityService() {
 
     companion object {
-        const val CH_ID = "grab"
-        @Volatile var running = false
+        @Volatile var instance: GrabService? = null
     }
 
-    private val rand = Random()
-    private val handler = Handler(Looper.getMainLooper())
     private var lastClick = 0L
     private var pending = false
-    private var pendingAt = 0L
-    private var lastReport = 0L
-
-    private fun report(msg: String) {
-        // 同一秒只报一次，避免刷屏
-        val now = System.currentTimeMillis()
-        if (now - lastReport < 1000) return
-        lastReport = now
-        try { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() } catch (e: Exception) {}
-    }
+    private var lastDebugReport = 0L
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        running = true
-        try { startForeground(1, buildNotice()) } catch (e: Exception) {}
-        try { startForegroundService(Intent(this, FloatService::class.java)) } catch (e: Exception) {}
-        handler.postDelayed(watchdog, 2000)
+        instance = this
+        report("服务已启动")
     }
 
-    private val watchdog = object : Runnable {
-        override fun run() {
-            if (pending && System.currentTimeMillis() - pendingAt > 3000) pending = false
-            if (running) handler.postDelayed(this, 2000)
-        }
-    }
-
-    private fun targetRoots(): List<AccessibilityNodeInfo> {
-        val roots = ArrayList<AccessibilityNodeInfo>()
-        try {
-            windows?.forEach { w ->
-                try { w.root?.let { roots.add(it) } } catch (e: Exception) {}
-            }
-        } catch (e: Exception) {}
-        try { rootInActiveWindow?.let { roots.add(it) } } catch (e: Exception) {}
-        return roots
-    }
-
-    override fun onAccessibilityEvent(e: AccessibilityEvent?) {
-        try {
-            if (!running || e == null) return
-
-            val pkg = e.packageName?.toString() ?: return
-
-            // 调试报告：看到谁的事件、配置的目标是谁
-            if (pkg != Config.targetPkg) {
-                report("事件来自[$pkg]，目标[${Config.targetPkg}]，不匹配")
-                return
-            }
-            if (e.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
-                e.eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) return
-            if (pending) return
-
-            val roots = targetRoots()
-            if (roots.isEmpty()) { report("拿不到窗口节点"); return }
-
-            val hitKw = Config.dialogKeywords.firstOrNull { kw ->
-                roots.any { r -> findByText(r, kw) }
-            }
-            if (hitKw == null) return
-
-            report("发现弹窗关键词[$hitKw]，准备点击")
-            val now = System.currentTimeMillis()
-            if (now - lastClick < 2000) { report("距上次点击太近，跳过"); return }
-
-            pending = true
-            pendingAt = now
-            val delay = Config.delayMin + rand.nextInt(
-                (Config.delayMax - Config.delayMin).coerceAtLeast(1))
-            handler.postDelayed({ tryClickWithRetry(0) }, delay.toLong())
-        } catch (e: Exception) {
-            pending = false
-        }
-    }
-
-    private fun tryClickWithRetry(attempt: Int) {
-        try {
-            if (!running) { pending = false; return }
-
-            val roots = targetRoots()
-            var btn: AccessibilityNodeInfo? = null
-            var hitBtnKw: String? = null
-            outer@ for (kw in Config.btnKeywords) {
-                for (r in roots) {
-                    btn = findClickable(r, kw)
-                    if (btn != null) { hitBtnKw = kw; break@outer }
-                }
-            }
-
-            if (btn != null) {
-                val rect = Rect()
-                btn.getBoundsInScreen(rect)
-                btn.recycle()
-                lastClick = System.currentTimeMillis()
-                report("点[$hitBtnKw] @${rect.centerX()},${rect.centerY()}")
-                scatterClick(rect)
-                pending = false
-                return
-            }
-
-            if (attempt < 4) {
-                handler.postDelayed({ tryClickWithRetry(attempt + 1) }, 80)
-            } else {
-                report("重试5次没找到按钮")
-                pending = false
-            }
-        } catch (e: Exception) {
-            pending = false
-        }
-    }
-
-    private fun scatterClick(r: Rect) {
-        val cx = r.left + r.width() / 2 + rand.nextInt((r.width() / 3).coerceAtLeast(1)) - r.width() / 6
-        val cy = r.top + r.height() / 2 + rand.nextInt((r.height() / 3).coerceAtLeast(1)) - r.height() / 6
-        val path = Path().apply {
-            moveTo(cx.toFloat(), cy.toFloat())
-            lineTo((cx + rand.nextInt(7) - 3).toFloat(),
-                   (cy + rand.nextInt(7) - 3).toFloat())
-        }
-        val stroke = GestureDescription.StrokeDescription(
-            path, 0L, (80 + rand.nextInt(70)).toLong())
-        dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
-    }
-
-    private fun findByText(root: AccessibilityNodeInfo?, t: String): Boolean {
-        if (root == null) return false
-        return try {
-            val list = root.findAccessibilityNodeInfosByText(t)
-            list != null && list.isNotEmpty()
-        } catch (e: Exception) { false }
-    }
-
-    private fun findClickable(root: AccessibilityNodeInfo?, p: String): AccessibilityNodeInfo? {
-        if (root == null) return null
-        return try {
-            val list = root.findAccessibilityNodeInfosByText(p) ?: return null
-            for (n in list) if (n.isClickable) return n
-            for (n in list) {
-                var cur: AccessibilityNodeInfo? = n.parent
-                var hops = 0
-                while (cur != null && hops < 5) {
-                    if (cur.isClickable) return cur
-                    cur = cur.parent
-                    hops++
-                }
-            }
-            null
-        } catch (e: Exception) { null }
-    }
-
-    private fun buildNotice(): Notification {
-        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        nm.createNotificationChannel(
-            NotificationChannel(CH_ID, "运行状态", NotificationManager.IMPORTANCE_LOW))
-        val pi = PendingIntent.getActivity(this, 0,
-            Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
-        return Notification.Builder(this, CH_ID)
-            .setContentTitle("轻单助手运行中")
-            .setSmallIcon(android.R.drawable.ic_media_play)
-            .setContentIntent(pi).setOngoing(true).build()
-    }
-
-    override fun onInterrupt() { running = false }
     override fun onDestroy() {
-        running = false
-        pending = false
-        handler.removeCallbacksAndMessages(null)
+        instance = null
         super.onDestroy()
     }
-    override fun onUnbind(i: Intent?): Boolean { running = false; return super.onUnbind(i) }
+
+    override fun onInterrupt() {}
+
+    override fun onAccessibilityEvent(e: AccessibilityEvent) {
+        val pkg = e.packageName?.toString() ?: return
+
+        // ---- 包名过滤 ----
+        if (pkg != Config.targetPkg) {
+            report("[$pkg] 不匹配")
+            return
+        }
+
+        val now = System.currentTimeMillis()
+
+        // ===== 诊断1：顺丰事件进来了就报，3秒限一次 =====
+        if (now - lastDebugReport > 3000) {
+            lastDebugReport = now
+            report("✅顺丰事件 type=${e.eventType}")
+        }
+        // ===== 诊断1结束 =====
+
+        if (pending) return
+        if (now - lastClick < 3000) return   // 点击后3秒内防抖
+
+        // ---- 收集所有窗口根节点 ----
+        val roots = ArrayList<AccessibilityNodeInfo?>()
+        try { roots.add(rootInActiveWindow) } catch (ex: Exception) {}
+        try { windows?.forEach { w -> roots.add(w.root) } } catch (ex: Exception) {}
+
+        // ---- 弹窗关键词命中检测（列表里任意一个词命中即触发）----
+        var hitDialogKw: String? = null
+        for (root in roots) {
+            if (root == null) continue
+            for (kw in Config.dialogKeywords) {
+                if (findByText(root, kw)) {
+                    hitDialogKw = kw
+                    break
+                }
+            }
+            if (hitDialogKw != null) break
+        }
+
+        if (hitDialogKw == null) return
+
+        // ===== 诊断2：报告哪个窗口命中了 =====
+        try {
+            val sb = StringBuilder("窗口:")
+            roots.forEachIndexed { i, r ->
+                val hit = r?.let { rr ->
+                    Config.dialogKeywords.any { findByText(rr, it) }
+                } ?: false
+                sb.append("$i=${if (hit) "✓" else if (r == null) "空" else "×"};")
+            }
+            report(sb.toString())
+        } catch (ex: Exception) {}
+        // ===== 诊断2结束 =====
+
+        report("发现弹窗关键词[$hitDialogKw]")
+        pending = true
+
+        // ---- 随机延迟后点击 ----
+        val delay = Random.nextLong(Config.delayMin.toLong(), Config.delayMax.toLong() + 1)
+        Thread {
+            Thread.sleep(delay)
+            doClick()
+        }.start()
+    }
+
+    // ---------- 点击：5次重试，节点点击+手势双保险 ----------
+
+    private fun doClick() {
+        var done = false
+        var hitBtnKw = ""
+        try {
+            val roots = ArrayList<AccessibilityNodeInfo?>()
+            try { roots.add(rootInActiveWindow) } catch (ex: Exception) {}
+            try { windows?.forEach { w -> roots.add(w.root) } } catch (ex: Exception) {}
+
+            for (i in 1..5) {
+                outer@ for (root in roots) {
+                    if (root == null) continue
+                    for (kw in Config.btnKeywords) {
+                        val nodes = root.findAccessibilityNodeInfosByText(kw)
+                        if (nodes != null && nodes.isNotEmpty()) {
+                            val btn = nodes[nodes.size - 1]   // 按钮一般在列表最后
+                            val rect = Rect()
+                            btn.getBoundsInScreen(rect)
+                            lastClick = System.currentTimeMillis()
+                            var ok = false
+                            try { ok = btn.performAction(AccessibilityNodeInfo.ACTION_CLICK) } catch (ex: Exception) {}
+                            if (!ok) { try { scatterClick(rect) } catch (ex: Exception) {} }
+                            try { btn.recycle() } catch (ex: Exception) {}
+                            done = true
+                            hitBtnKw = kw
+                            break@outer
+                        }
+                    }
+                }
+                if (done) break
+                Thread.sleep(200)
+            }
+        } catch (ex: Exception) {}
+
+        if (done) {
+            report("点[$hitBtnKw] 完成")
+        } else {
+            report("没找到按钮${Config.btnKeywords}")
+        }
+        pending = false
+    }
+
+    private fun findByText(root: AccessibilityNodeInfo, text: String): Boolean {
+        val nodes = root.findAccessibilityNodeInfosByText(text)
+        return nodes != null && nodes.isNotEmpty()
+    }
+
+    private fun scatterClick(rect: Rect) {
+        val cx = rect.centerX().toFloat()
+        val cy = rect.centerY().toFloat()
+        val path = Path().apply { moveTo(cx, cy); lineTo(cx, cy) }
+        val gesture = android.accessibilityservice.GestureDescription.Builder()
+            .addStroke(android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 50))
+            .build()
+        dispatchGesture(gesture, null, null)
+    }
+
+    private fun report(msg: String) {
+        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+    }
 }
