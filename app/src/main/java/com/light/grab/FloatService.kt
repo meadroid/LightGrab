@@ -19,6 +19,7 @@ class FloatService : Service() {
     private lateinit var wm: WindowManager
     private var dot: ImageView? = null
     private var params: WindowManager.LayoutParams? = null
+    private var longPressRunnable: Runnable? = null
 
     override fun onBind(i: Intent?): IBinder? = null
 
@@ -31,6 +32,9 @@ class FloatService : Service() {
 
     private fun dp(v: Int): Int = TypedValue.applyDimension(
         TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics).toInt()
+
+    private fun icon(): Int = if (GrabService.running)
+        android.R.drawable.presence_online else android.R.drawable.presence_invisible
 
     private fun showDot() {
         if (dot != null) return
@@ -54,11 +58,18 @@ class FloatService : Service() {
 
         try { wm.addView(dot, params) } catch (e: Exception) { return }
 
-        // 触摸：拖动跟手；轻点=暂停/恢复；长按保留关闭；松手吸附边缘
+        // 触摸：拖动跟手；轻点=暂停/恢复；长按关闭；松手吸附边缘
         var downX = 0f; var downY = 0f
         var startX = 0; var startY = 0
         var moved = false
         var longPressFired = false
+
+        longPressRunnable = Runnable {
+            if (!moved) {
+                longPressFired = true
+                stopSelf()
+            }
+        }
 
         dot!!.setOnTouchListener { v, ev ->
             when (ev.action) {
@@ -67,13 +78,8 @@ class FloatService : Service() {
                     startX = params!!.x; startY = params!!.y
                     moved = false
                     longPressFired = false
-                    // 手动实现长按：600ms 没动就触发关闭
-                    v.postDelayed({
-                        if (!moved) {
-                            longPressFired = true
-                            stopSelf()
-                        }
-                    }, 600)
+                    // 手动长按：600ms 没动就关闭
+                    v.postDelayed(longPressRunnable, 600)
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -81,7 +87,7 @@ class FloatService : Service() {
                     val dy = (ev.rawY - downY).toInt()
                     if (!moved && (Math.abs(dx) > dp(10) || Math.abs(dy) > dp(10))) {
                         moved = true
-                        v.removeCallbacks(null)  // 一动就取消长按判定
+                        longPressRunnable?.let { v.removeCallbacks(it) }
                     }
                     if (moved) {
                         params!!.x = startX + dx
@@ -91,9 +97,9 @@ class FloatService : Service() {
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    v.removeCallbacks(null)
+                    longPressRunnable?.let { v.removeCallbacks(it) }
                     if (longPressFired) {
-                        // 长按已关闭，不处理
+                        // 长按已触发关闭
                     } else if (!moved) {
                         // 轻点：暂停/恢复
                         GrabService.running = !GrabService.running
@@ -111,9 +117,6 @@ class FloatService : Service() {
             }
         }
     }
-
-    private fun ImageView.icon() = if (GrabService.running)
-        android.R.drawable.presence_online else android.R.drawable.presence_invisible
 
     /** 前台通知：静默低存在感 */
     private fun notify(): Notification {
