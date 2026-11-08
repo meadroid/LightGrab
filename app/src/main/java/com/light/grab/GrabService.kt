@@ -58,7 +58,7 @@ class GrabService : AccessibilityService() {
         val r = Rect().also { btn.getBoundsInScreen(it) }
         btn.recycle()
         handler.postDelayed({ scatterClick(r) },
-            800 + rand.nextInt(maxDelay - 800 + 1))
+            (800 + rand.nextInt(maxDelay - 800 + 1)).toLong())   // ✅ 修1: toLong
     }
 
     /** 按钮区域内随机取点，模拟按下-微滑-抬起 */
@@ -70,7 +70,9 @@ class GrabService : AccessibilityService() {
             lineTo((cx + rand.nextInt(7) - 3).toFloat(),
                    (cy + rand.nextInt(7) - 3).toFloat())
         }
-        val stroke = GestureDescription.StrokeDescription(path, 0, 80 + rand.nextInt(70))
+        // ✅ 修2: 手势起点和时长均为 Long
+        val stroke = GestureDescription.StrokeDescription(
+            path, 0L, (80 + rand.nextInt(70)).toLong())
         dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
     }
 
