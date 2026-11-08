@@ -1,51 +1,89 @@
 package com.light.grab
 
-import android.Manifest
 import android.app.AlertDialog
 import android.content.ComponentName
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.text.method.ScrollingMovementMethod
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ImageButton
+import android.widget.TextView
 import android.widget.Toast
-import androidx.appcompat.app.AppCompatActivity
-import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
+import android.app.Activity
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : Activity() {
 
     private lateinit var pkg: EditText
     private lateinit var dialogKw: EditText
     private lateinit var btnKw: EditText
+    private lateinit var tvStatus: TextView
+    private lateinit var tvPkg: TextView
+    private lateinit var tvLog: TextView
 
     override fun onCreate(s: Bundle?) {
         super.onCreate(s)
         setContentView(R.layout.activity_main)
 
-        // 初始化配置中心（读持久化设置，GrabService 和这里共用同一份）
+        // 初始化配置中心（读持久化设置，GrabService 共用）
         Config.init(applicationContext)
 
-        pkg = findViewById(R.id.pkg)
-        dialogKw = findViewById(R.id.dialog_kw)
-        btnKw = findViewById(R.id.btn_kw)
+        pkg = findViewById(R.id.etPkg)
+        dialogKw = findViewById(R.id.etDialog)
+        btnKw = findViewById(R.id.etBtn)
+        tvStatus = findViewById(R.id.tvStatus)
+        tvPkg = findViewById(R.id.tvPkg)
+        tvLog = findViewById(R.id.tvLog)
+        tvLog.movementMethod = ScrollingMovementMethod()
 
-        // 从 Config 恢复上次配置（不再单独存 SharedPreferences，统一走 Config）
+        // 恢复上次配置
         pkg.setText(Config.targetPkg)
         dialogKw.setText(Config.dialogKeywords.joinToString(","))
         btnKw.setText(Config.btnKeywords.joinToString(","))
+        tvPkg.text = "目标：${Config.targetPkg}"
 
         // 应用点选
-        findViewById<Button>(R.id.pick).setOnClickListener { pickApp() }
+        findViewById<Button>(R.id.btnPick).setOnClickListener { pickApp() }
 
         // 启动
-        findViewById<Button>(R.id.go).setOnClickListener {
+        findViewById<ImageButton>(R.id.btnStart).setOnClickListener {
             saveAndApply()
             ensurePerms()
         }
+
+        // 停止（拉起系统无障碍设置页让用户关闭；弹窗监听随服务停止自动失效）
+        findViewById<ImageButton>(R.id.btnStop).setOnClickListener {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            Toast.makeText(this, "请在无障碍页关闭本应用服务", Toast.LENGTH_LONG).show()
+        }
+
+        // 一键授权
+        findViewById<ImageButton>(R.id.btnAuth).setOnClickListener { ensurePerms() }
+
+        refreshStatus()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refreshStatus() // 从设置页回来时刷新状态显示
+    }
+
+    private fun refreshStatus() {
+        val on = isAccOn()
+        if (on) {
+            tvStatus.text = "● 运行中"
+            tvStatus.setTextColor(0xFF2E7D32.toInt())
+            findViewById<android.view.View>(R.id.statusCard)
+                .setBackgroundColor(0xFFE8F5E9.toInt())
+        } else {
+            tvStatus.text = "● 已停止"
+            tvStatus.setTextColor(0xFFC62828.toInt())
+            findViewById<android.view.View>(R.id.statusCard)
+                .setBackgroundColor(0xFFFBE9E7.toInt())
+        }
+        tvPkg.text = "目标：${Config.targetPkg}"
     }
 
     private fun saveAndApply() {
@@ -53,14 +91,12 @@ class MainActivity : AppCompatActivity() {
         val dText = dialogKw.text.toString().ifBlank { Config.dialogKeywords.joinToString(",") }
         val bText = btnKw.text.toString().ifBlank { Config.btnKeywords.joinToString(",") }
 
-        // 全部写入 Config：立即生效（GrabService 实时读）+ 自动持久化
+        // 写入 Config：立即生效（GrabService 实时读）+ 自动持久化
         Config.setTargetPkg(p)
         Config.setDialogKeywords(dText)
         Config.setBtnKeywords(bText)
 
-        Toast.makeText(this,
-            "目标：${Config.targetPkg}\n弹窗词：${Config.dialogKeywords.joinToString("/")}\n按钮：${Config.btnKeywords.joinToString("/")}",
-            Toast.LENGTH_LONG).show()
+        log("设置已保存 → ${Config.targetPkg}")
     }
 
     /** 列出已安装应用，点选即填包名 */
@@ -68,10 +104,7 @@ class MainActivity : AppCompatActivity() {
         val pm = packageManager
         val apps = pm.getInstalledApplications(0)
             .filter { pm.getLaunchIntentForPackage(it.packageName) != null }
-            .map { Triple(
-                pm.getApplicationLabel(it).toString(),
-                it.packageName,
-                pm.getApplicationIcon(it)) }
+            .map { Pair(pm.getApplicationLabel(it).toString(), it.packageName) }
             .sortedBy { it.first }
 
         val names = apps.map { "${it.first}  (${it.second})" }.toTypedArray()
@@ -79,7 +112,7 @@ class MainActivity : AppCompatActivity() {
             .setTitle("选择目标应用")
             .setItems(names) { _, i ->
                 pkg.setText(apps[i].second)
-                Toast.makeText(this, "已选：${apps[i].first}", Toast.LENGTH_SHORT).show()
+                saveAndApply()
             }
             .setNegativeButton("取消", null)
             .show()
@@ -98,40 +131,28 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
             return
         }
-        // 3. 悬浮窗
-        if (!Settings.canDrawOverlays(this)) {
-            Toast.makeText(this, "请允许显示悬浮窗", Toast.LENGTH_LONG).show()
-            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                Uri.parse("package:$packageName")))
-            return
-        }
-        // 4. 通知（Android 13+，前台服务通知必需）
+        // 3. 通知（Android 13+）
         if (Build.VERSION.SDK_INT >= 33 &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
-                != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this,
-                arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 1)
         }
-        startService(Intent(this, FloatService::class.java))
-        Toast.makeText(this, "✅ 已启动，去目标应用等弹窗吧", Toast.LENGTH_SHORT).show()
+        refreshStatus()
+        Toast.makeText(this, "✅ 已就绪，去目标应用等弹窗吧", Toast.LENGTH_SHORT).show()
     }
 
     private fun isAccOn(): Boolean {
         val expected = ComponentName(this, GrabService::class.java).flattenToString()
         return Settings.Secure.getString(contentResolver,
             Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)?.split(':')?.any {
-            it.equals(expected, true) || it.endsWith(":$expected", true) ||
-            it.equals("$packageName/".plus(expected.substringAfter('/')), true)
+            it.equals(expected, true) ||
+            it.equals("$packageName/." + expected.substringAfter('/'), true)
         } == true
     }
 
-    private fun hasUsage(): Boolean {
-        return try {
-            packageManager.getPackageInfo(packageName, 0).also {
-                AppOpsCheck.check(this)
-            } != null && AppOpsCheck.check(this)
-        } catch (e: Exception) { false }
-    }
+    private fun hasUsage(): Boolean = try {
+        AppOpsCheck.check(this)
+    } catch (e: Exception) { false }
 
     private object AppOpsCheck {
         fun check(ctx: android.content.Context): Boolean = try {
@@ -142,4 +163,12 @@ class MainActivity : AppCompatActivity() {
             mode.toString() == "MODE_ALLOWED" || mode == 0
         } catch (e: Exception) { true }
     }
+
+    private fun log(msg: String) {
+        tvLog.append("\n[$now] $msg")
+    }
+
+    private val now: String
+        get() = java.text.SimpleDateFormat("HH:mm:ss",
+            java.util.Locale.CHINA).format(java.util.Date())
 }
