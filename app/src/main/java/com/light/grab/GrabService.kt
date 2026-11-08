@@ -1,6 +1,12 @@
 package com.light.grab
 
 import android.accessibilityservice.AccessibilityService
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Intent
+import android.graphics.Color
 import android.graphics.Path
 import android.graphics.Rect
 import android.view.accessibility.AccessibilityEvent
@@ -13,6 +19,8 @@ class GrabService : AccessibilityService() {
     companion object {
         @Volatile var instance: GrabService? = null
         @Volatile var logHook: ((String) -> Unit)? = null
+        private const val CH_ID = "grab_status"
+        private const val NOTI_ID = 1
     }
 
     private var lastClick = 0L
@@ -21,30 +29,63 @@ class GrabService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        notifyStatus(running = true)
         log("服务已启动 ✅ 监听: ${Config.targetPkg}")
     }
 
     override fun onDestroy() {
         instance = null
+        notifyStatus(running = false)   // 停止时换成红点提示
         super.onDestroy()
     }
 
     override fun onInterrupt() {}
 
+    // ---------- 状态栏通知：极简一行，绿=运行 / 红=停止 ----------
+
+    private fun notifyStatus(running: Boolean) {
+        try {
+            val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+            if (android.os.Build.VERSION.SDK_INT >= 26) {
+                nm.createNotificationChannel(
+                    NotificationChannel(CH_ID, "运行状态", NotificationManager.IMPORTANCE_MIN)
+                )
+            }
+            val b = Notification.Builder(this, CH_ID)
+                .setSmallIcon(android.R.drawable.presence_online)   // 系统自带小圆点图标
+                .setContentTitle(if (running) "🟢 运行中" else "🔴 已停止")
+                .setOngoing(running)
+                .setShowWhen(false)
+                .setPriority(Notification.PRIORITY_MIN)
+            if (running) {
+                b.setColor(Color.rgb(0, 200, 120))   // 薄荷绿
+                b.setAutoCancel(false)
+            } else {
+                b.setColor(Color.rgb(220, 60, 60))   // 红
+                b.setAutoCancel(true)                // 红条用户可划走
+            }
+            // 点击跳到本 App 界面
+            val pi = PendingIntent.getActivity(
+                this, 0,
+                Intent(this, Class.forName("com.light.grab.MainActivity")),
+                PendingIntent.FLAG_IMMUTABLE
+            )
+            b.setContentIntent(pi)
+            nm.notify(NOTI_ID, b.build())
+        } catch (ex: Exception) {}
+    }
+
     override fun onAccessibilityEvent(e: AccessibilityEvent?) {
         val pkg = e?.packageName?.toString() ?: return
 
-        if (pkg != Config.targetPkg) return   // 非目标应用，静默跳过
+        if (pkg != Config.targetPkg) return
         if (pending) return
-        // 冷却只防"同一个弹窗连点"，压到 600ms，新弹窗几乎立即响应
         if (System.currentTimeMillis() - lastClick < 399) return
 
-        // ---- 收集所有窗口根节点 ----
         val roots = ArrayList<AccessibilityNodeInfo?>()
         try { roots.add(rootInActiveWindow) } catch (ex: Exception) {}
         try { windows?.forEach { w -> roots.add(w.root) } } catch (ex: Exception) {}
 
-        // ---- 弹窗关键词检测 ----
         var hit: String? = null
         for (root in roots) {
             if (root == null) continue
@@ -61,8 +102,6 @@ class GrabService : AccessibilityService() {
         val delay = Random.nextLong(Config.delayMin.toLong(), Config.delayMax.toLong() + 1)
         Thread { Thread.sleep(delay); doClick() }.start()
     }
-
-    // ---------- 点击：重试找按钮，节点点击+手势兜底 ----------
 
     private fun doClick() {
         var done = false
