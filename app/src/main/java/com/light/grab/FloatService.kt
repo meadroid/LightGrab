@@ -1,5 +1,8 @@
 package com.light.grab
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
 import android.graphics.PixelFormat
@@ -18,6 +21,7 @@ class FloatService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        startForeground(1, notify())
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
         dot = ImageView(this).apply {
             setImageResource(icon())
@@ -38,9 +42,28 @@ class FloatService : Service() {
         })
     }
 
+    /** 前台通知：静默低存在感 */
+    private fun notify(): Notification {
+        val nm = getSystemService(NotificationManager::class.java)
+        nm.createNotificationChannel(
+            NotificationChannel("fg", "后台运行",
+                NotificationManager.IMPORTANCE_MIN).apply {
+                setShowBadge(false)
+            })
+        return Notification.Builder(this, "fg")
+            .setSmallIcon(android.R.drawable.stat_notify_sync_noanim)
+            .setContentText("运行中 · 点悬浮球暂停")
+            .setOngoing(true)
+            .build()
+    }
+
     private fun ImageView.icon() = if (GrabService.running)
         android.R.drawable.presence_online else android.R.drawable.presence_invisible
 
     override fun onStartCommand(i: Intent?, f: Int, id: Int): Int = START_STICKY
-    override fun onDestroy() { dot?.let { wm.removeView(it) }; super.onDestroy() }
+
+    override fun onDestroy() {
+        dot?.let { wm.removeView(it) }
+        super.onDestroy()
+    }
 }
