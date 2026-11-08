@@ -1,5 +1,7 @@
-<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="app_background">#E8F5E9</color>
-    <color name="app_background_dark">#1B2E1B</color>
+    <color name="green_on">#2E7D32</color>
+    <color name="red_off">#C62828</color>
+    <color name="bg_on">#E8F5E9</color>
+    <color name="bg_off">#FBE9E7</color>
+    <color name="log_bg">#1E1E1E</color>
 </resources>
