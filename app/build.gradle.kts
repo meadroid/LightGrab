@@ -29,7 +29,9 @@ android {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro")
-            signingConfig = signingConfigs.getByName("release")
+            // ✅ 本地有密钥就签名，云端没有则出未签名包，不再报错
+            val ks = rootProject.file("lightgrab.jks")
+            if (ks.exists()) signingConfig = signingConfigs.getByName("release")
         }
     }
 
