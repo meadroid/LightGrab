@@ -1,5 +1,6 @@
 package com.light.grab
 
+import android.app.Activity
 import android.app.AlertDialog
 import android.content.ComponentName
 import android.content.Intent
@@ -7,12 +8,12 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.text.method.ScrollingMovementMethod
+import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.TextView
 import android.widget.Toast
-import android.app.Activity
 
 class MainActivity : Activity() {
 
@@ -53,7 +54,7 @@ class MainActivity : Activity() {
             ensurePerms()
         }
 
-        // 停止（拉起系统无障碍设置页让用户关闭；弹窗监听随服务停止自动失效）
+        // 停止：引导用户去无障碍设置页关闭服务（系统不允许 App 静默关闭无障碍）
         findViewById<ImageButton>(R.id.btnStop).setOnClickListener {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
             Toast.makeText(this, "请在无障碍页关闭本应用服务", Toast.LENGTH_LONG).show()
@@ -67,7 +68,15 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        refreshStatus() // 从设置页回来时刷新状态显示
+        // 注册日志钩子：服务日志实时显示到界面日志区
+        GrabService.logHook = { msg -> runOnUiThread { log(msg) } }
+        refreshStatus()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // 退出界面时撤钩子，服务自动退回 Toast 提示
+        GrabService.logHook = null
     }
 
     private fun refreshStatus() {
@@ -75,13 +84,11 @@ class MainActivity : Activity() {
         if (on) {
             tvStatus.text = "● 运行中"
             tvStatus.setTextColor(0xFF2E7D32.toInt())
-            findViewById<android.view.View>(R.id.statusCard)
-                .setBackgroundColor(0xFFE8F5E9.toInt())
+            findViewById<View>(R.id.statusCard).setBackgroundColor(0xFFE8F5E9.toInt())
         } else {
             tvStatus.text = "● 已停止"
             tvStatus.setTextColor(0xFFC62828.toInt())
-            findViewById<android.view.View>(R.id.statusCard)
-                .setBackgroundColor(0xFFFBE9E7.toInt())
+            findViewById<View>(R.id.statusCard).setBackgroundColor(0xFFFBE9E7.toInt())
         }
         tvPkg.text = "目标：${Config.targetPkg}"
     }
