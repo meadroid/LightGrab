@@ -1,0 +1,7 @@
+<resources>
+    <!-- 深色模式主题：柔和深灰绿，不纯黑不刺眼 -->
+    <style name="Theme.LightGrab" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/page_bg</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>
