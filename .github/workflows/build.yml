@@ -22,7 +22,7 @@ jobs:
         run: chmod +x gradlew
 
       - name: 打包 Debug APK（自动带签名）
-        run: ./gradlew assembleDebug
+        run: ./gradlew assembleDebug --no-daemon
 
       - name: 上传 APK 产物
         uses: actions/upload-artifact@v4
