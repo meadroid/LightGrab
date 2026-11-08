@@ -40,7 +40,7 @@ class FloatService : Service() {
         if (dot != null) return
 
         // 球体加大到 52dp
-        val size = dp(52)
+        val size = dp(36)
         dot = ImageView(this).apply {
             setImageResource(icon())
             setOnLongClickListener { stopSelf(); true }
