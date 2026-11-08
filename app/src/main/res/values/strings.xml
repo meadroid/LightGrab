@@ -1,3 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">轻单助手</string>
     <string name="service_desc">自动点击二次确认弹窗，仅限指定应用</string>
