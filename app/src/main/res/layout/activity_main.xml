@@ -1,13 +1,28 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent" android:layout_height="match_parent"
-    android:orientation="vertical" android:padding="24dp" android:gravity="center">
+    android:orientation="vertical" android:padding="24dp"
+    android:gravity="center_vertical">
 
     <EditText android:id="@+id/pkg"
         android:layout_width="match_parent" android:layout_height="wrap_content"
         android:hint="@string/pkg_hint" android:inputType="text"/>
 
+    <Button android:id="@+id/pick"
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="8dp" android:text="@string/pick_app"/>
+
+    <EditText android:id="@+id/dialog_kw"
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="24dp" android:hint="@string/dialog_hint"
+        android:inputType="text"/>
+
+    <EditText android:id="@+id/btn_kw"
+        android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="8dp" android:hint="@string/btn_hint"
+        android:inputType="text"/>
+
     <Button android:id="@+id/go"
         android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:layout_marginTop="16dp" android:text="启动 / 一键授权"/>
+        android:layout_marginTop="24dp" android:text="启动 / 一键授权"/>
 </LinearLayout>
