@@ -37,7 +37,6 @@ class GrabService : AccessibilityService() {
         super.onServiceConnected()
         running = true
         startForeground(1, buildNotice())
-        startService(Intent(this, GuardService::class.java))
         startService(Intent(this, FloatService::class.java))
     }
 
@@ -66,7 +65,7 @@ class GrabService : AccessibilityService() {
     /** 按钮区域内随机取点，模拟按下-微滑-抬起 */
     private fun scatterClick(r: Rect) {
         val cx = r.left + r.width() / 2 + rand.nextInt(r.width() / 3) - r.width() / 6
-        val cy = r.top + r.height() / 2 + rand.nextInt(r.height() / 3) - r.width() / 6
+        val cy = r.top + r.height() / 2 + rand.nextInt(r.height() / 3) - r.height() / 6
         val path = Path().apply {
             moveTo(cx.toFloat(), cy.toFloat())
             lineTo((cx + rand.nextInt(7) - 3).toFloat(),
