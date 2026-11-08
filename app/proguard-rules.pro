@@ -1,1 +1,2 @@
 -keep class com.light.grab.GrabService { *; }
+-keep class com.light.grab.FloatService { *; }
