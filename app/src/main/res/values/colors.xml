@@ -1,7 +1,11 @@
 <resources>
-    <color name="green_on">#2E7D32</color>
-    <color name="red_off">#C62828</color>
-    <color name="bg_on">#E8F5E9</color>
-    <color name="bg_off">#FBE9E7</color>
-    <color name="log_bg">#1E1E1E</color>
+    <color name="green_on">#3EBD93</color>
+    <color name="red_off">#E07A6E</color>
+    <color name="bg_on">#DFF5EC</color>
+    <color name="bg_off">#DFF5EC</color>
+    <color name="log_bg">#F0F7F3</color>
+    <color name="log_text">#3A4A42</color>
+    <color name="text_hint">#8FA69B</color>
+    <color name="text_link">#2E9B72</color>
+    <color name="page_bg">#FAFDFB</color>
 </resources>
