@@ -26,15 +26,17 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(s)
         setContentView(R.layout.activity_main)
 
+        // 初始化配置中心（读持久化设置，GrabService 和这里共用同一份）
+        Config.init(applicationContext)
+
         pkg = findViewById(R.id.pkg)
         dialogKw = findViewById(R.id.dialog_kw)
         btnKw = findViewById(R.id.btn_kw)
 
-        // 恢复上次配置
-        val sp = getSharedPreferences("cfg", MODE_PRIVATE)
-        pkg.setText(sp.getString("pkg", GrabService.targetPkg))
-        dialogKw.setText(sp.getString("dialog", GrabService.dialogKeywords.joinToString(",")))
-        btnKw.setText(sp.getString("btn", GrabService.btnKeywords.joinToString(",")))
+        // 从 Config 恢复上次配置（不再单独存 SharedPreferences，统一走 Config）
+        pkg.setText(Config.targetPkg)
+        dialogKw.setText(Config.dialogKeywords.joinToString(","))
+        btnKw.setText(Config.btnKeywords.joinToString(","))
 
         // 应用点选
         findViewById<Button>(R.id.pick).setOnClickListener { pickApp() }
@@ -47,23 +49,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun saveAndApply() {
-        val p = pkg.text.toString().trim().ifEmpty { GrabService.targetPkg }
-        val d = dialogKw.text.toString().split("，", ",")
-            .map { it.trim() }.filter { it.isNotEmpty() }
-            .ifEmpty { GrabService.dialogKeywords }
-        val b = btnKw.text.toString().split("，", ",")
-            .map { it.trim() }.filter { it.isNotEmpty() }
-            .ifEmpty { GrabService.btnKeywords }
+        val p = pkg.text.toString().trim().ifEmpty { Config.targetPkg }
+        val dText = dialogKw.text.toString().ifBlank { Config.dialogKeywords.joinToString(",") }
+        val bText = btnKw.text.toString().ifBlank { Config.btnKeywords.joinToString(",") }
 
-        GrabService.targetPkg = p
-        GrabService.dialogKeywords = d
-        GrabService.btnKeywords = b
+        // 全部写入 Config：立即生效（GrabService 实时读）+ 自动持久化
+        Config.setTargetPkg(p)
+        Config.setDialogKeywords(dText)
+        Config.setBtnKeywords(bText)
 
-        getSharedPreferences("cfg", MODE_PRIVATE).edit()
-            .putString("pkg", p).putString("dialog", d.joinToString(","))
-            .putString("btn", b.joinToString(",")).apply()
-
-        Toast.makeText(this, "目标：$p\n弹窗词：${d.joinToString("/")}\n按钮：${b.joinToString("/")}",
+        Toast.makeText(this,
+            "目标：${Config.targetPkg}\n弹窗词：${Config.dialogKeywords.joinToString("/")}\n按钮：${Config.btnKeywords.joinToString("/")}",
             Toast.LENGTH_LONG).show()
     }
 
