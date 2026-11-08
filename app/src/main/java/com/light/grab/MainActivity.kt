@@ -1,5 +1,6 @@
 package com.light.grab
 
+import android.accessibilityservice.AccessibilityServiceInfo   // ✅ 修3: 补import
 import android.app.AppOpsManager
 import android.content.Context
 import android.content.Intent
