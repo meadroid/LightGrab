@@ -21,11 +21,11 @@ jobs:
       - name: 授权 gradlew
         run: chmod +x gradlew
 
-      - name: 打包 Release APK
-        run: ./gradlew assembleRelease
+      - name: 打包 Debug APK（自动带签名）
+        run: ./gradlew assembleDebug
 
       - name: 上传 APK 产物
         uses: actions/upload-artifact@v4
         with:
           name: LightGrab-v1.0
-          path: app/build/outputs/apk/release/*.apk
+          path: app/build/outputs/apk/debug/*.apk
