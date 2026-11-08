@@ -5,33 +5,27 @@ import android.graphics.Path
 import android.graphics.Rect
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import android.widget.Toast
 import kotlin.random.Random
 
 class GrabService : AccessibilityService() {
 
     companion object {
         @Volatile var instance: GrabService? = null
-        @Volatile var running = false   // FloatService 悬浮球靠它变色
+        // 日志钩子：MainActivity 注册后，服务日志直接显示到界面日志区
+        @Volatile var logHook: ((String) -> Unit)? = null
     }
 
     private var lastClick = 0L
     private var pending = false
-    private var lastPkgToast = 0L
-
-    // Toast 总开关：测试期 true，确认能用后改 false 全静音
-    private val DEBUG = true
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        running = true
-        report("服务已启动")
+        log("服务已启动 ✅ 监听: ${Config.targetPkg}")
     }
 
     override fun onDestroy() {
         instance = null
-        running = false
         super.onDestroy()
     }
 
@@ -40,13 +34,7 @@ class GrabService : AccessibilityService() {
     override fun onAccessibilityEvent(e: AccessibilityEvent?) {
         val pkg = e?.packageName?.toString() ?: return
 
-        // ---- 探针1：报告每个事件来源（DEBUG期专用）----
-        if (DEBUG && System.currentTimeMillis() - lastPkgToast > 5000) {
-            lastPkgToast = System.currentTimeMillis()
-            report("事件来源: $pkg")
-        }
-
-        if (pkg != Config.targetPkg) return   // 非顺丰，静默跳过
+        if (pkg != Config.targetPkg) return   // 非目标应用，静默跳过
         if (pending) return
         if (System.currentTimeMillis() - lastClick < 3000) return
 
@@ -66,7 +54,7 @@ class GrabService : AccessibilityService() {
         }
         if (hit == null) return
 
-        report("发现弹窗关键词[$hit]")
+        log("🔥 发现弹窗[$hit]，延迟点击...")
         pending = true
 
         val delay = Random.nextLong(Config.delayMin.toLong(), Config.delayMax.toLong() + 1)
@@ -107,7 +95,7 @@ class GrabService : AccessibilityService() {
             }
         } catch (ex: Exception) {}
 
-        report(if (done) "点[$hitBtnKw] 完成✅" else "没找到按钮${Config.btnKeywords}")
+        log(if (done) "点[$hitBtnKw] 完成 ✅" else "⚠️ 未找到按钮 ${Config.btnKeywords}")
         pending = false
     }
 
@@ -126,8 +114,10 @@ class GrabService : AccessibilityService() {
         dispatchGesture(gesture, null, null)
     }
 
-    private fun report(msg: String) {
-        if (!DEBUG) return
-        try { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() } catch (ex: Exception) {}
+    /** 日志：优先写界面日志区，App 不在前台时退回 Toast（保证手机上能看到） */
+    private fun log(msg: String) {
+        val hook = logHook
+        if (hook != null) { try { hook(msg) } catch (ex: Exception) {} }
+        else { try { Toast.makeText(this, msg, Toast.LENGTH_SHORT).show() } catch (ex: Exception) {} }
     }
 }
