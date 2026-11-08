@@ -26,27 +26,45 @@ class GrabService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
     private var lastClick = 0L
     private var pending = false
-    private var pendingAt = 0L   // pending 开始时间，用于超时强制复位
+    private var pendingAt = 0L
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         running = true
         startForeground(1, buildNotice())
         startService(Intent(this, FloatService::class.java))
-        // 看门狗：每 2 秒自检一次，防卡死
         handler.postDelayed(watchdog, 2000)
     }
 
-    // ===== 保险①：看门狗，pending 超过 3 秒视为卡死，强制复位 =====
+    // 看门狗：每 2 秒自检，pending 超 3 秒强制复位，防装死
     private val watchdog = object : Runnable {
         override fun run() {
             try {
                 if (pending && System.currentTimeMillis() - pendingAt > 3000) {
-                    pending = false   // 卡死了，强制放行，下一单照常接
+                    pending = false
                 }
             } catch (e: Exception) { }
             if (running) handler.postDelayed(this, 2000)
         }
+    }
+
+    /** 收集目标应用的所有窗口根节点（含弹窗），全部兼容低版本 */
+    private fun targetRoots(): List<AccessibilityNodeInfo> {
+        val roots = ArrayList<AccessibilityNodeInfo>()
+        try {
+            val w = windows ?: return roots
+            for (win in w) {
+                try {
+                    val r = win.root ?: continue
+                    if (r.packageName?.toString() == Config.targetPkg) roots.add(r)
+                } catch (e: Exception) { }
+            }
+        } catch (e: Exception) { }
+        // 兜底：当前活动窗口（去重，避免和上面重复也无所谓，查词而已）
+        try {
+            rootInActiveWindow?.let { roots.add(it) }
+        } catch (e: Exception) { }
+        return roots
     }
 
     override fun onAccessibilityEvent(e: AccessibilityEvent?) {
@@ -57,13 +75,11 @@ class GrabService : AccessibilityService() {
                 e.eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) return
             if (pending) return
 
-            // ===== 保险②：整段业务 try-catch，任何异常不复位就漏单 =====
-            val sfWindows = try { windows.filter { it.packageName == Config.targetPkg } }
-                            catch (e: Exception) { return }
-            if (sfWindows.isEmpty()) return
+            val roots = targetRoots()
+            if (roots.isEmpty()) return
 
-            val hit = sfWindows.any { w ->
-                Config.dialogKeywords.any { kw -> findByText(w.root, kw) }
+            val hit = roots.any { r ->
+                Config.dialogKeywords.any { kw -> findByText(r, kw) }
             }
             if (!hit) return
 
@@ -76,26 +92,31 @@ class GrabService : AccessibilityService() {
                 (Config.delayMax - Config.delayMin).coerceAtLeast(1))
             handler.postDelayed({ tryClickWithRetry(0) }, delay.toLong())
         } catch (e: Exception) {
-            // 保险③：最外层兜底，绝不让异常杀死事件处理能力
             pending = false
         }
     }
 
+    // 找按钮重试 5 次×80ms；点中即停，绝不重复点
     private fun tryClickWithRetry(attempt: Int) {
         try {
             if (!running) { pending = false; return }
 
-            val sfWindows = try { windows.filter { it.packageName == Config.targetPkg } }
-                            catch (e: Exception) { emptyList<android.view.accessibility.AccessibilityWindow>() }
-            val btn = Config.btnKeywords.firstNotNullOfOrNull { kw ->
-                sfWindows.firstNotNullOfOrNull { w -> findClickable(w.root, kw) }
+            val roots = targetRoots()
+            var btn: AccessibilityNodeInfo? = null
+            for (kw in Config.btnKeywords) {
+                for (r in roots) {
+                    btn = findClickable(r, kw)
+                    if (btn != null) break
+                }
+                if (btn != null) break
             }
 
             if (btn != null) {
-                val r = Rect().also { btn.getBoundsInScreen(it) }
+                val rect = Rect()
+                btn.getBoundsInScreen(rect)
                 btn.recycle()
                 lastClick = System.currentTimeMillis()
-                scatterClick(r)
+                scatterClick(rect)
                 pending = false
                 return
             }
@@ -103,10 +124,10 @@ class GrabService : AccessibilityService() {
             if (attempt < 4) {
                 handler.postDelayed({ tryClickWithRetry(attempt + 1) }, 80)
             } else {
-                pending = false   // 5 次没找到，正常放弃，复位等下一单
+                pending = false
             }
         } catch (e: Exception) {
-            pending = false   // 任何异常都复位，绝不卡死
+            pending = false
         }
     }
 
@@ -125,21 +146,29 @@ class GrabService : AccessibilityService() {
 
     private fun findByText(root: AccessibilityNodeInfo?, t: String): Boolean {
         if (root == null) return false
-        return try { root.findAccessibilityNodeInfosByText(t)?.isNotEmpty() == true } catch (e: Exception) { false }
+        return try {
+            val list = root.findAccessibilityNodeInfosByText(t)
+            list != null && list.isNotEmpty()
+        } catch (e: Exception) { false }
     }
 
     private fun findClickable(root: AccessibilityNodeInfo?, p: String): AccessibilityNodeInfo? {
         if (root == null) return null
         return try {
-            root.findAccessibilityNodeInfosByText(p)?.firstOrNull { it.isClickable }
-                ?: root.findAccessibilityNodeInfosByText(p)?.firstOrNull { n ->
-                    var cur = n.parent
-                    while (cur != null) {
-                        if (cur.isClickable) return@firstOrNull cur
-                        cur = cur.parent
-                    }
-                    null
+            val list = root.findAccessibilityNodeInfosByText(p) ?: return null
+            // 先找自身可点击的
+            for (n in list) if (n.isClickable) return n
+            // 再向上找可点击的父节点
+            for (n in list) {
+                var cur: AccessibilityNodeInfo? = n.parent
+                var hops = 0
+                while (cur != null && hops < 5) {
+                    if (cur.isClickable) return cur
+                    cur = cur.parent
+                    hops++
                 }
+            }
+            null
         } catch (e: Exception) { null }
     }
 
