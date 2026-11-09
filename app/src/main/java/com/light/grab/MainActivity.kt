@@ -23,18 +23,17 @@ class MainActivity : AppCompatActivity() {
         const val MODE_SHADOW = 0    // 影子：只看不点
         const val MODE_SENTRY = 1    // 哨兵：发现弹窗
         const val MODE_SNIPER = 2    // 狙击：自动点击抢单
-        const val MODE_LIGHTTAP = 3  // 轻点：狙击+延时
-        const val MODE_SILENT = 4    // 静默：仅记录
+        const val MODE_SILENT = 3    // 静默：仅记录
 
         val APPS = mapOf(
             "顺丰骑士" to "com.sfexpress.sfapp",
             "美团骑手" to "com.sankuai.meituan.takeoutnew.rider"
         )
 
-        val MODE_NAMES = listOf("影子", "哨兵", "狙击", "轻点", "静默")
+        val MODE_NAMES = listOf("影子", "哨兵", "狙击", "静默")
         val CHIP_IDS = listOf(
             R.id.chipShadow, R.id.chipSentry,
-            R.id.chipSniper, R.id.chipLightTap, R.id.chipSilent
+            R.id.chipSniper, R.id.chipSilent
         )
     }
 
@@ -63,7 +62,6 @@ class MainActivity : AppCompatActivity() {
         logScroll = findViewById(R.id.logScroll)
         btnMain = findViewById(R.id.btnMain)
 
-        // 五个胶囊，选中高亮，互斥
         CHIP_IDS.forEachIndexed { index, id ->
             findViewById<TextView>(id).setOnClickListener { setMode(index) }
         }
@@ -81,20 +79,20 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 记事本图标：单击复制全部日志
+        // 日志区右上角小图标：点击复制日志
         findViewById<ImageButton>(R.id.btnCopyLog).setOnClickListener {
             val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             cm.setPrimaryClip(ClipData.newPlainText("log", tvLog.text))
             Toast.makeText(this, "日志已复制", Toast.LENGTH_SHORT).show()
         }
 
-        setMode(GrabService.currentMode)
+        setMode(sp.getInt("mode", MODE_SHADOW))
         log("轻点已启动")
         tvStatus.post(refresh)
     }
 
     private fun setMode(mode: Int) {
-        GrabService.currentMode = mode   // 关键：同步给服务
+        GrabService.currentMode = mode
         sp.edit().putInt("mode", mode).apply()
         CHIP_IDS.forEachIndexed { index, id ->
             val chip = findViewById<TextView>(id)
@@ -121,11 +119,14 @@ class MainActivity : AppCompatActivity() {
             java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.CHINA).format(java.util.Date(last))
         else "无"
 
-        val line1 = if (running && isAccOn()) "● $modeName 模式运行" else "○ $modeName · 服务未运行"
-        tvStatus.text = "$line1\n今日命中 $today 单 · 最近 $lastStr\n累计命中 $total 单"
+        val line1 = when {
+            running && isAccOn() -> "● ${modeName}模式运行中"
+            else -> "○ ${modeName}模式待启动"
+        }
+        // 第2、3行前缀都是4个字，对齐
+        tvStatus.text = "$line1\n今日战果：命中 $today 发 · 最后一发 $lastStr\n累计战果：共命中 $total 发"
     }
 
-    // 权限判断：不依赖 AccessibilityServiceInfo，直接读系统设置
     private fun isAccOn(): Boolean {
         val enabled = Settings.Secure.getString(
             contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
