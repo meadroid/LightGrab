@@ -30,13 +30,16 @@ class GrabService : AccessibilityService() {
         var isRunning: Boolean = false
     }
 
-    private lateinit var sp: SharedPreferences
+    // 惰性初始化：第一次访问时自动创建，永远不会有"未初始化就使用"的崩溃
+    private val sp: SharedPreferences by lazy {
+        getSharedPreferences("lightdot", Context.MODE_PRIVATE)
+    }
+
     private var lastFire = 0L
     private val handler = Handler(Looper.getMainLooper())
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        sp = getSharedPreferences("lightdot", Context.MODE_PRIVATE)
         startFg()
         log("[服务] 已连接，模式=${MainActivity.MODE_NAMES[currentMode]}")
     }
@@ -45,7 +48,7 @@ class GrabService : AccessibilityService() {
         event ?: return
         val pkg = event.packageName?.toString() ?: return
 
-        // 目标应用过滤：读设置页选择，all = 全部应用
+        // 目标应用过滤：读设置页选择，全部应用时不限制
         val appIndex = sp.getInt("app_index", MainActivity.APPS.size) // 默认全部应用
         if (appIndex < MainActivity.APPS.size) {
             val target = MainActivity.APPS.values.toList()[appIndex]
