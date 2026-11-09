@@ -32,8 +32,9 @@ class GrabService : AccessibilityService() {
     // ==================== 纯事件驱动 ====================
 
     override fun onAccessibilityEvent(e: AccessibilityEvent?) {
-        // 多包名：列表里任何一个命中都算
-        if (!Config.isTarget(e?.packageName?.toString())) return
+        // 多包名：列表里任何一个命中都算（先判空，再过滤）
+        val pkgName = e?.packageName?.toString() ?: return
+        if (!Config.isTarget(pkgName)) return
         when (e.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> detect()
@@ -125,7 +126,7 @@ class GrabService : AccessibilityService() {
         for (kw in keywords) {
             val nodes = try { root.findAccessibilityNodeInfosByText(kw) } catch (ex: Exception) { null }
             if (nodes != null) {
-                for (n in nodes) if (isVisibleOnScreen(n)) return kw
+                for (n in nodes) if (isVisibleOnScreen(n) && n.text == kw) return kw
             }
         }
         return null
