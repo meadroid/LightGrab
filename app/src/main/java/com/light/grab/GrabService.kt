@@ -117,7 +117,12 @@ class GrabService : AccessibilityService() {
     }
 
     private fun visible(n: AccessibilityNodeInfo): Boolean = try {
-        n.isVisibleToUser && n.getBoundsInScreen(Rect()).let { it.width() > 0 && it.height() > 0 }
+        if (!n.isVisibleToUser) false
+        else {
+            val r = Rect()
+            n.getBoundsInScreen(r)
+            r.width() > 0 && r.height() > 0
+        }
     } catch (ex: Exception) { false }
 
     private fun probe(msg: String) {
