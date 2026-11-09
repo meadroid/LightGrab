@@ -23,6 +23,13 @@ class GrabService : AccessibilityService() {
         @Volatile var logHook: ((String) -> Unit)? = null
         private const val CH_ID = "grab_status"
         private const val NOTI_ID = 1
+
+        private const val WATCHDOG_MS = 5000L    // 看门狗超时
+        private const val CLICK_GAP_MS = 300L    // 两次点击最小间隔
+        private const val RETRY_MS = 120L        // 找按钮重试间隔
+        private const val RETRY_MAX = 8          // 找按钮最多重试次数
+        private const val RECHECK_MS = 250L      // 点完复查间隔
+        private const val HEARTBEAT_MS = 1500L   // 心跳间隔
     }
 
     private var lastClick = 0L
@@ -34,7 +41,7 @@ class GrabService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         notifyStatus(running = true)
-        log("服务已启动 ✅ 监听: ${Config.targetPkg}")
+        log("服务已启动 ✅")
         startHeartbeat()
     }
 
@@ -47,18 +54,18 @@ class GrabService : AccessibilityService() {
 
     override fun onInterrupt() {}
 
-    // ---------- 心跳：每 1.5 秒自己扫一遍屏幕，不等顺丰喂事件 ----------
+    // ==================== 心跳：不依赖顺丰事件，定期自查屏幕 ====================
 
     private fun startHeartbeat() {
         mainHandler.postDelayed(object : Runnable {
             override fun run() {
                 try { detect() } catch (ex: Exception) {}
-                mainHandler.postDelayed(this, 1500)
+                mainHandler.postDelayed(this, HEARTBEAT_MS)
             }
-        }, 1500)
+        }, HEARTBEAT_MS)
     }
 
-    // ---------- 状态栏通知：绿=运行 / 红=停止 ----------
+    // ==================== 状态栏通知：绿=运行 / 红=停止 ====================
 
     private fun notifyStatus(running: Boolean) {
         try {
@@ -74,105 +81,84 @@ class GrabService : AccessibilityService() {
                 .setOngoing(running)
                 .setShowWhen(false)
                 .setPriority(Notification.PRIORITY_MIN)
-            if (running) {
-                b.setColor(Color.rgb(0, 200, 120))
-                b.setAutoCancel(false)
-            } else {
-                b.setColor(Color.rgb(220, 60, 60))
-                b.setAutoCancel(true)
-            }
-            val pi = PendingIntent.getActivity(
-                this, 0,
-                Intent(this, Class.forName("com.light.grab.MainActivity")),
-                PendingIntent.FLAG_IMMUTABLE
+                .setColor(if (running) Color.rgb(0, 200, 120) else Color.rgb(220, 60, 60))
+            b.setContentIntent(
+                PendingIntent.getActivity(
+                    this, 0,
+                    Intent(this, Class.forName("com.light.grab.MainActivity")),
+                    PendingIntent.FLAG_IMMUTABLE
+                )
             )
-            b.setContentIntent(pi)
             nm.notify(NOTI_ID, b.build())
         } catch (ex: Exception) {}
     }
 
+    // ==================== 事件入口 + 检测 ====================
+
     override fun onAccessibilityEvent(e: AccessibilityEvent?) {
-        val pkg = e?.packageName?.toString() ?: return
-        if (pkg != Config.targetPkg) return
+        if (e?.packageName?.toString() != Config.targetPkg) return
         detect()
     }
 
-    /** 检测弹窗；锁定期内由看门狗/补扫接管，事件不丢失 */
     private fun detect(): Boolean {
+        // 看门狗：pending 超 5 秒 = 卡死，强制复位
         if (pending) {
-            // 看门狗：pending 超 5 秒 = 卡死，强制复位
-            if (System.currentTimeMillis() - pendingStart > 5000) {
+            if (System.currentTimeMillis() - pendingStart > WATCHDOG_MS) {
                 log("🔧 检测到卡死，强制复位")
                 pending = false
             } else {
                 return false
             }
         }
-        if (System.currentTimeMillis() - lastClick < 300) return false
+        if (System.currentTimeMillis() - lastClick < CLICK_GAP_MS) return false
 
-        val roots = ArrayList<AccessibilityNodeInfo?>()
-        try { roots.add(rootInActiveWindow) } catch (ex: Exception) {}
-        try { windows?.forEach { w -> roots.add(w.root) } } catch (ex: Exception) {}
+        val roots = collectRoots()
 
+        // 一道门：弹窗关键词在场
         var hit: String? = null
-        for (root in roots) {
+        outer@ for (root in roots) {
             if (root == null) continue
             for (kw in Config.dialogKeywords) {
-                if (findByText(root, kw)) { hit = kw; break }
+                if (findByText(root, kw)) { hit = kw; break@outer }
             }
-            if (hit != null) break
         }
         if (hit == null) return false
+
+        // 二道门：按钮关键词也在场，才认定真弹窗（防列表页残留字样误点）
+        var btnReady = false
+        outer2@ for (root in roots) {
+            if (root == null) continue
+            for (kw in Config.btnKeywords) {
+                if (findByText(root, kw)) { btnReady = true; break@outer2 }
+            }
+        }
+        if (!btnReady) return false
 
         log("🔥 发现弹窗[$hit]，延迟点击...")
         pending = true
         pendingStart = System.currentTimeMillis()
 
         val delay = Random.nextLong(Config.delayMin.toLong(), Config.delayMax.toLong() + 1)
-        Thread { Thread.sleep(delay); doClick() }.start()
+        Thread { try { Thread.sleep(delay) } catch (ex: Exception) {} ; doClick() }.start()
         return true
     }
+
+    // ==================== 点击：三层递进策略 ====================
 
     private fun doClick() {
         var done = false
         var hitBtnKw = ""
         try {
-            // 最多重试 8 次 × 120ms ≈ 1 秒，等弹窗按钮渲染完
-            for (i in 1..8) {
-                val roots = ArrayList<AccessibilityNodeInfo?>()
-                try { roots.add(rootInActiveWindow) } catch (ex: Exception) {}
-                try { windows?.forEach { w -> roots.add(w.root) } } catch (ex: Exception) {}
+            for (i in 1..RETRY_MAX) {
+                val roots = collectRoots()
 
                 outer@ for (root in roots) {
                     if (root == null) continue
                     for (kw in Config.btnKeywords) {
                         val nodes = try { root.findAccessibilityNodeInfosByText(kw) } catch (ex: Exception) { null }
                         if (nodes != null && nodes.isNotEmpty()) {
-                            val btn = nodes[nodes.size - 1]
-                            val rect = Rect()
-                            btn.getBoundsInScreen(rect)
-
-                            // ===== 三层递进点击策略 =====
-                            // 第一层：文字节点自己就能点
-                            var target: AccessibilityNodeInfo? = if (btn.isClickable) btn else null
-                            // 第二层：向上爬最多5层，找可点击的父节点
-                            if (target == null) {
-                                var p = btn.parent
-                                var hops = 0
-                                while (p != null && hops < 5) {
-                                    if (p.isClickable) { target = p; break }
-                                    p = p.parent; hops++
-                                }
-                            }
                             lastClick = System.currentTimeMillis()
-                            var ok = false
-                            if (target != null) {
-                                try { ok = target.performAction(AccessibilityNodeInfo.ACTION_CLICK) } catch (ex: Exception) {}
-                            }
-                            // 第三层：前面没点成就补一记坐标手势，只要文字在屏上就能点到
-                            if (!ok && rect.width() > 0 && rect.height() > 0) {
-                                try { scatterClick(rect) } catch (ex: Exception) {}
-                            }
+                            tapButton(nodes[nodes.size - 1])
                             done = true
                             hitBtnKw = kw
                             break@outer
@@ -180,7 +166,7 @@ class GrabService : AccessibilityService() {
                     }
                 }
                 if (done) break
-                Thread.sleep(120)
+                Thread.sleep(RETRY_MS)
             }
         } catch (ex: Exception) {
         } finally {
@@ -190,8 +176,41 @@ class GrabService : AccessibilityService() {
 
         log(if (done) "点[$hitBtnKw] 完成 ✅" else "⚠️ 未找到按钮 ${Config.btnKeywords}")
 
-        // 点成或没点成，都安排 250ms 后复查：弹窗还挂着就持续抓，不彻底停
-        mainHandler.postDelayed({ detect() }, 250)
+        // 复查：弹窗还挂着就持续抓，不彻底停
+        mainHandler.postDelayed({ try { detect() } catch (ex: Exception) {} }, RECHECK_MS)
+    }
+
+    /** 三层递进：节点自点 → 爬父节点 → 坐标手势保底 */
+    private fun tapButton(btn: AccessibilityNodeInfo) {
+        val rect = Rect()
+        btn.getBoundsInScreen(rect)
+
+        var target: AccessibilityNodeInfo? = if (btn.isClickable) btn else null
+        if (target == null) {
+            var p = btn.parent
+            var hops = 0
+            while (p != null && hops < 5) {
+                if (p.isClickable) { target = p; break }
+                p = p.parent; hops++
+            }
+        }
+
+        var ok = false
+        if (target != null) {
+            try { ok = target.performAction(AccessibilityNodeInfo.ACTION_CLICK) } catch (ex: Exception) {}
+        }
+        if (!ok && rect.width() > 0 && rect.height() > 0) {
+            try { scatterClick(rect) } catch (ex: Exception) {}
+        }
+    }
+
+    // ==================== 工具 ====================
+
+    private fun collectRoots(): List<AccessibilityNodeInfo?> {
+        val roots = ArrayList<AccessibilityNodeInfo?>()
+        try { roots.add(rootInActiveWindow) } catch (ex: Exception) {}
+        try { windows?.forEach { w -> roots.add(w.root) } } catch (ex: Exception) {}
+        return roots
     }
 
     private fun findByText(root: AccessibilityNodeInfo, text: String): Boolean {
@@ -203,10 +222,12 @@ class GrabService : AccessibilityService() {
         val cx = rect.centerX().toFloat()
         val cy = rect.centerY().toFloat()
         val path = Path().apply { moveTo(cx, cy); lineTo(cx, cy) }
-        val gesture = android.accessibilityservice.GestureDescription.Builder()
-            .addStroke(android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 50))
-            .build()
-        dispatchGesture(gesture, null, null)
+        dispatchGesture(
+            android.accessibilityservice.GestureDescription.Builder()
+                .addStroke(android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 50))
+                .build(),
+            null, null
+        )
     }
 
     private fun log(msg: String) {
