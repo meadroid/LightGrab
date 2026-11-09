@@ -1,7 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">轻单助手</string>
-    <string name="service_desc">自动点击二次确认弹窗，仅限指定应用</string>
-    <string name="pkg_hint">目标应用包名（默认顺丰同城骑士）</string>
-    <string name="dialog_hint">弹窗特征词（多个用逗号分隔）</string>
-    <string name="btn_hint">要点击的按钮文字</string>
+    <string name="service_desc">监控顺丰骑士弹窗并自动点击确认抢单</string>
 </resources>
