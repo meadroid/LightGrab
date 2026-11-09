@@ -3,24 +3,24 @@
     xmlns:app="http://schemas.android.com/apk/res-auto">
 
     <item
-        android:id="@+id/action_arsenal"
-        android:title="武器库"
-        app:showAsAction="never">
-        <menu>
-            <item
-                android:id="@+id/action_target"
-                android:title="狙击目标" />
-            <item
-                android:id="@+id/action_keyword"
-                android:title="关键词" />
-            <item
-                android:id="@+id/action_sentry_delay"
-                android:title="哨兵延时" />
-            <item
-                android:id="@+id/action_sniper_delay"
-                android:title="狙击延时" />
-        </menu>
-    </item>
+        android:id="@+id/action_target"
+        android:title="狙击目标"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_keyword"
+        android:title="关键词"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_sentry_delay"
+        android:title="哨兵延时"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_sniper_delay"
+        android:title="狙击延时"
+        app:showAsAction="never" />
 
     <item
         android:id="@+id/action_permission"
