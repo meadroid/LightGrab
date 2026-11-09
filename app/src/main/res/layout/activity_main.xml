@@ -3,106 +3,49 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:background="@color/page_bg"
-    android:paddingStart="16dp" android:paddingEnd="16dp"
-    android:paddingTop="12dp" android:paddingBottom="12dp">
+    android:padding="16dp">
 
-    <!-- ① 状态区 -->
-    <LinearLayout
-        android:id="@+id/statusCard"
+    <TextView
+        android:id="@+id/tvStatus"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="12dp"
-        android:background="@color/bg_off">
+        android:text="● 状态未知"
+        android:textSize="20sp"
+        android:textStyle="bold"
+        android:padding="12dp" />
 
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical">
-
-            <TextView
-                android:id="@+id/tvStatus"
-                android:layout_width="0dp" android:layout_weight="1"
-                android:layout_height="wrap_content"
-                android:text="● 已停止"
-                android:textSize="16sp" android:textStyle="bold"
-                android:textColor="@color/red_off"
-                android:fontFamily="monospace" />
-
-            <ImageButton android:id="@+id/btnStart"
-                android:layout_width="40dp" android:layout_height="40dp"
-                android:src="@android:drawable/ic_media_play"
-                android:background="?android:attr/selectableItemBackgroundBorderless"
-                android:contentDescription="启动"/>
-            <ImageButton android:id="@+id/btnStop"
-                android:layout_width="40dp" android:layout_height="40dp"
-                android:src="@android:drawable/ic_media_pause"
-                android:background="?android:attr/selectableItemBackgroundBorderless"
-                android:contentDescription="停止"/>
-            <ImageButton android:id="@+id/btnAuth"
-                android:layout_width="40dp" android:layout_height="40dp"
-                android:src="@android:drawable/ic_menu_manage"
-                android:background="?android:attr/selectableItemBackgroundBorderless"
-                android:contentDescription="一键授权"/>
-        </LinearLayout>
-
-        <TextView
-            android:id="@+id/tvPkg"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:textSize="12sp" android:textColor="@color/text_hint"
-            android:fontFamily="monospace"
-            android:layout_marginTop="4dp" />
-    </LinearLayout>
-
-    <!-- ② 设置区 -->
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="0dp" android:layout_weight="34"
-        android:orientation="vertical"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
         android:layout_marginTop="12dp">
 
-        <TextView style="@style/Glabel" android:text="目标应用" />
-        <EditText android:id="@+id/etPkg" style="@style/Ginput"
-            android:hint="@string/pkg_hint"/>
-        <Button android:id="@+id/btnPick"
-            android:layout_width="match_parent" android:layout_height="40dp"
-            android:layout_marginTop="4dp"
-            android:text="📋 从已安装应用点选"
-            android:background="@android:color/transparent"
-            android:textColor="@color/text_link" android:textSize="13sp" />
+        <Button
+            android:id="@+id/btnStart"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="wrap_content"
+            android:text="启动" />
 
-        <TextView style="@style/Glabel" android:text="弹窗关键词（逗号分隔）" />
-        <EditText android:id="@+id/etDialog" style="@style/Ginput"
-            android:hint="@string/dialog_hint"/>
+        <Button
+            android:id="@+id/btnStop"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="wrap_content"
+            android:text="停止" />
 
-        <TextView style="@style/Glabel" android:text="按钮关键词（逗号分隔）" />
-        <EditText android:id="@+id/etBtn" style="@style/Ginput"
-            android:hint="@string/btn_hint"/>
     </LinearLayout>
 
-    <!-- ③ 日志区（约48%） -->
     <TextView
-        android:layout_width="wrap_content" android:layout_height="wrap_content"
-        android:text="运行日志" android:textSize="12sp" android:textColor="@color/text_hint"
-        android:layout_marginTop="12dp" android:layout_marginBottom="4dp" />
-
-    <ScrollView
-        android:id="@+id/logScroll"
+        android:id="@+id/tvLog"
         android:layout_width="match_parent"
-        android:layout_height="0dp" android:layout_weight="48"
-        android:background="@color/log_bg"
-        android:padding="8dp">
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginTop="12dp"
+        android:background="#F5F5F5"
+        android:padding="8dp"
+        android:text="— 就绪 —"
+        android:textSize="13sp"
+        android:gravity="top" />
 
-        <TextView
-            android:id="@+id/tvLog"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:fontFamily="monospace"
-            android:textSize="12sp"
-            android:textColor="@color/log_text"
-            android:text="—— 就绪 ——"/>
-    </ScrollView>
 </LinearLayout>
