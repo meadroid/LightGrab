@@ -24,18 +24,19 @@ class GrabService : AccessibilityService() {
         private const val CH_ID = "grab_status"
         private const val NOTI_ID = 1
 
-        private const val WATCHDOG_MS = 5000L    // 看门狗超时
-        private const val CLICK_GAP_MS = 300L    // 两次点击最小间隔
-        private const val RETRY_MS = 120L        // 找按钮重试间隔
-        private const val RETRY_MAX = 8          // 找按钮最多重试次数
-        private const val RECHECK_MS = 250L      // 点完复查间隔
-        private const val HEARTBEAT_MS = 1500L   // 心跳间隔
+        private const val WATCHDOG_MS = 5000L
+        private const val CLICK_GAP_MS = 300L
+        private const val RETRY_MS = 120L
+        private const val RETRY_MAX = 8
+        private const val RECHECK_MS = 250L
+        private const val HEARTBEAT_MS = 1500L
     }
 
     private var lastClick = 0L
     private var pending = false
     private var pendingStart = 0L
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val screenRect = Rect()
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -54,7 +55,7 @@ class GrabService : AccessibilityService() {
 
     override fun onInterrupt() {}
 
-    // ==================== 心跳：不依赖顺丰事件，定期自查屏幕 ====================
+    // ==================== 心跳：定期自查屏幕 ====================
 
     private fun startHeartbeat() {
         mainHandler.postDelayed(object : Runnable {
@@ -65,7 +66,7 @@ class GrabService : AccessibilityService() {
         }, HEARTBEAT_MS)
     }
 
-    // ==================== 状态栏通知：绿=运行 / 红=停止 ====================
+    // ==================== 状态栏通知 ====================
 
     private fun notifyStatus(running: Boolean) {
         try {
@@ -101,7 +102,6 @@ class GrabService : AccessibilityService() {
     }
 
     private fun detect(): Boolean {
-        // 看门狗：pending 超 5 秒 = 卡死，强制复位
         if (pending) {
             if (System.currentTimeMillis() - pendingStart > WATCHDOG_MS) {
                 log("🔧 检测到卡死，强制复位")
@@ -114,25 +114,12 @@ class GrabService : AccessibilityService() {
 
         val roots = collectRoots()
 
-        // 一道门：弹窗关键词在场
-        var hit: String? = null
-        outer@ for (root in roots) {
-            if (root == null) continue
-            for (kw in Config.dialogKeywords) {
-                if (findByText(root, kw)) { hit = kw; break@outer }
-            }
-        }
-        if (hit == null) return false
+        // 一道门：弹窗关键词【真的显示在屏幕上】
+        var hit = findVisibleText(roots, Config.dialogKeywords) ?: return false
 
-        // 二道门：按钮关键词也在场，才认定真弹窗（防列表页残留字样误点）
-        var btnReady = false
-        outer2@ for (root in roots) {
-            if (root == null) continue
-            for (kw in Config.btnKeywords) {
-                if (findByText(root, kw)) { btnReady = true; break@outer2 }
-            }
-        }
-        if (!btnReady) return false
+        // 二道门：按钮关键词也【真的显示在屏幕上】
+        val btnVisible = findVisibleText(roots, Config.btnKeywords) != null
+        if (!btnVisible) return false
 
         log("🔥 发现弹窗[$hit]，延迟点击...")
         pending = true
@@ -143,7 +130,7 @@ class GrabService : AccessibilityService() {
         return true
     }
 
-    // ==================== 点击：三层递进策略 ====================
+    // ==================== 点击 ====================
 
     private fun doClick() {
         var done = false
@@ -156,12 +143,17 @@ class GrabService : AccessibilityService() {
                     if (root == null) continue
                     for (kw in Config.btnKeywords) {
                         val nodes = try { root.findAccessibilityNodeInfosByText(kw) } catch (ex: Exception) { null }
-                        if (nodes != null && nodes.isNotEmpty()) {
-                            lastClick = System.currentTimeMillis()
-                            tapButton(nodes[nodes.size - 1])
-                            done = true
-                            hitBtnKw = kw
-                            break@outer
+                        if (nodes != null) {
+                            // 只点【真的在屏幕上】的那个节点，隐藏鬼节点直接跳过
+                            for (n in nodes) {
+                                if (isVisibleOnScreen(n)) {
+                                    lastClick = System.currentTimeMillis()
+                                    tapButton(n)
+                                    done = true
+                                    hitBtnKw = kw
+                                    break@outer
+                                }
+                            }
                         }
                     }
                 }
@@ -170,13 +162,11 @@ class GrabService : AccessibilityService() {
             }
         } catch (ex: Exception) {
         } finally {
-            // 无论走到哪，强制解锁，pending 永不锈死
             pending = false
         }
 
-        log(if (done) "点[$hitBtnKw] 完成 ✅" else "⚠️ 未找到按钮 ${Config.btnKeywords}")
+        log(if (done) "点[$hitBtnKw] 完成 ✅" else "⚠️ 未找到可见按钮 ${Config.btnKeywords}")
 
-        // 复查：弹窗还挂着就持续抓，不彻底停
         mainHandler.postDelayed({ try { detect() } catch (ex: Exception) {} }, RECHECK_MS)
     }
 
@@ -213,9 +203,47 @@ class GrabService : AccessibilityService() {
         return roots
     }
 
-    private fun findByText(root: AccessibilityNodeInfo, text: String): Boolean {
-        val nodes = try { root.findAccessibilityNodeInfosByText(text) } catch (ex: Exception) { null }
-        return nodes != null && nodes.isNotEmpty()
+    /**
+     * ★ 上镜检查：文字必须真的显示在屏幕上才算数。
+     * 隐藏、折叠、滚动到屏外的「鬼节点」全部淘汰 —— 治空点。
+     */
+    private fun isVisibleOnScreen(node: AccessibilityNodeInfo): Boolean {
+        try {
+            if (!node.isVisibleToUser) return false
+            val r = Rect()
+            node.getBoundsInScreen(r)
+            if (r.width() <= 0 || r.height() <= 0) return false
+            getRealScreenRect()
+            return Rect.intersects(r, screenRect)
+        } catch (ex: Exception) { return false }
+    }
+
+    private fun getRealScreenRect() {
+        try {
+            val dm = resources.displayMetrics
+            screenRect.set(0, 0, dm.widthPixels, dm.heightPixels)
+        } catch (ex: Exception) {
+            screenRect.set(0, 0, 1080, 2400)
+        }
+    }
+
+    /** 在 roots 里找【可见的】关键词，返回命中的关键词，找不到返回 null */
+    private fun findVisibleText(
+        roots: List<AccessibilityNodeInfo?>,
+        keywords: List<String>
+    ): String? {
+        for (root in roots) {
+            if (root == null) continue
+            for (kw in keywords) {
+                val nodes = try { root.findAccessibilityNodeInfosByText(kw) } catch (ex: Exception) { null }
+                if (nodes != null) {
+                    for (n in nodes) {
+                        if (isVisibleOnScreen(n)) return kw
+                    }
+                }
+            }
+        }
+        return null
     }
 
     private fun scatterClick(rect: Rect) {
