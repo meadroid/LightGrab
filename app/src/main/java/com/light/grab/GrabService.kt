@@ -79,7 +79,7 @@ class GrabService : AccessibilityService() {
                 if (now - lastFire < 300) return
                 lastFire = now
 
-                val delay = Random.nextLong(minD, maxD + 1)  // 区间内随机
+                val delay = Random.nextLong(minD.toLong(), maxD.toLong() + 1)
                 val tag = MainActivity.MODE_NAMES[currentMode]
                 if (!realClick) {
                     log("[影子·测试]命中「$kw」延时${delay}ms（不点击）")
