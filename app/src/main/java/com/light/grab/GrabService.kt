@@ -27,7 +27,7 @@ class GrabService : AccessibilityService() {
 
     private var lastClick = 0L
     private var pending = false
-    private var pendingStart = 0L          // ★ 看门狗：记录 pending 开始时间
+    private var pendingStart = 0L
     private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onServiceConnected() {
@@ -35,6 +35,7 @@ class GrabService : AccessibilityService() {
         instance = this
         notifyStatus(running = true)
         log("服务已启动 ✅ 监听: ${Config.targetPkg}")
+        startHeartbeat()
     }
 
     override fun onDestroy() {
@@ -46,7 +47,18 @@ class GrabService : AccessibilityService() {
 
     override fun onInterrupt() {}
 
-    // ---------- 状态栏通知：极简一行，绿=运行 / 红=停止 ----------
+    // ---------- 心跳：不依赖顺丰事件，每 1.5 秒自己看一眼屏幕 ----------
+
+    private fun startHeartbeat() {
+        mainHandler.postDelayed(object : Runnable {
+            override fun run() {
+                try { detect() } catch (ex: Exception) {}
+                mainHandler.postDelayed(this, 1500)
+            }
+        }, 1500)
+    }
+
+    // ---------- 状态栏通知：绿=运行 / 红=停止 ----------
 
     private fun notifyStatus(running: Boolean) {
         try {
@@ -85,22 +97,18 @@ class GrabService : AccessibilityService() {
         detect()
     }
 
-    /** 检测弹窗；若在锁定(pending/冷却)期内则安排延时复查，事件不再丢失 */
+    /** 检测弹窗；锁定期内安排延时复查，事件不丢失 */
     private fun detect(): Boolean {
         if (pending) {
-            // ★ 看门狗：pending 超过 5 秒 = doClick 卡死了，强制复位并继续检测
+            // 看门狗：pending 超 5 秒 = 卡死，强制复位
             if (System.currentTimeMillis() - pendingStart > 5000) {
                 log("🔧 检测到卡死，强制复位")
                 pending = false
             } else {
-                scheduleRecheck()
                 return false
             }
         }
-        if (System.currentTimeMillis() - lastClick < 300) {
-            scheduleRecheck()
-            return false
-        }
+        if (System.currentTimeMillis() - lastClick < 300) return false
 
         val roots = ArrayList<AccessibilityNodeInfo?>()
         try { roots.add(rootInActiveWindow) } catch (ex: Exception) {}
@@ -118,26 +126,18 @@ class GrabService : AccessibilityService() {
 
         log("🔥 发现弹窗[$hit]，延迟点击...")
         pending = true
-        pendingStart = System.currentTimeMillis()   // ★ 记录开始时间，供看门狗判断
+        pendingStart = System.currentTimeMillis()
 
         val delay = Random.nextLong(Config.delayMin.toLong(), Config.delayMax.toLong() + 1)
         Thread { Thread.sleep(delay); doClick() }.start()
         return true
     }
 
-    /** 延时补扫：把被闸门挡掉的弹窗抓回来 */
-    private fun scheduleRecheck() {
-        if (pending) return   // 真在处理中，无需补
-        mainHandler.postDelayed({
-            if (!pending) detect()
-        }, 250)
-    }
-
     private fun doClick() {
         var done = false
         var hitBtnKw = ""
         try {
-            for (i in 1..5) {
+            for (i in 1..8) {
                 val roots = ArrayList<AccessibilityNodeInfo?>()
                 try { roots.add(rootInActiveWindow) } catch (ex: Exception) {}
                 try { windows?.forEach { w -> roots.add(w.root) } } catch (ex: Exception) {}
@@ -148,11 +148,19 @@ class GrabService : AccessibilityService() {
                         val nodes = try { root.findAccessibilityNodeInfosByText(kw) } catch (ex: Exception) { null }
                         if (nodes != null && nodes.isNotEmpty()) {
                             val btn = nodes[nodes.size - 1]
+                            // 文字节点可能不可点，往上找可点击的父节点
+                            var target: AccessibilityNodeInfo = btn
+                            var p = btn.parent
+                            var hops = 0
+                            while (p != null && hops < 5) {
+                                if (p.isClickable) { target = p; break }
+                                p = p.parent; hops++
+                            }
                             val rect = Rect()
-                            btn.getBoundsInScreen(rect)
+                            target.getBoundsInScreen(rect)
                             lastClick = System.currentTimeMillis()
                             var ok = false
-                            try { ok = btn.performAction(AccessibilityNodeInfo.ACTION_CLICK) } catch (ex: Exception) {}
+                            try { ok = target.performAction(AccessibilityNodeInfo.ACTION_CLICK) } catch (ex: Exception) {}
                             if (!ok) { try { scatterClick(rect) } catch (ex: Exception) {} }
                             done = true
                             hitBtnKw = kw
@@ -161,20 +169,18 @@ class GrabService : AccessibilityService() {
                     }
                 }
                 if (done) break
-                Thread.sleep(100)
+                Thread.sleep(120)
             }
         } catch (ex: Exception) {
         } finally {
-            // ★ 无论线程走到哪，最后强制解锁，pending 永不锈死
+            // 无论走到哪，强制解锁，pending 永不锈死
             pending = false
         }
 
         log(if (done) "点[$hitBtnKw] 完成 ✅" else "⚠️ 未找到按钮 ${Config.btnKeywords}")
 
-        // ★ 点完立刻安排 250ms 后主动复查，不等顺丰下一次事件
-        if (done) {
-            mainHandler.postDelayed({ detect() }, 250)
-        }
+        // 点成或没点成，都安排 250ms 后复查，弹窗挂着就持续抓
+        mainHandler.postDelayed({ detect() }, 250)
     }
 
     private fun findByText(root: AccessibilityNodeInfo, text: String): Boolean {
