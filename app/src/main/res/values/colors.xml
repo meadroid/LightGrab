@@ -1,10 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- 主色：薄荷绿 -->
     <color name="mint">#2E9E7B</color>
     <color name="mintDark">#1F7A5E</color>
-    <color name="mintBg">#EAF5F0</color>
+    <color name="mintBg">#12201A</color>
     <color name="mintTextOn">#FFFFFF</color>
-    <color name="grayChip">#F0F0F0</color>
-    <color name="grayText">#666666</color>
-    <color name="ink">#333333</color>
+
+    <!-- 深色体系：和主界面统一 -->
+    <color name="grayChip">#1E2A24</color>
+    <color name="grayText">#8A968F</color>
+    <color name="ink">#DDE7E1</color>
+    <color name="bgDark">#0E1512</color>
+    <color name="logBg">#12201A</color>
 </resources>
