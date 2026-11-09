@@ -72,7 +72,7 @@ class MainActivity : AppCompatActivity() {
                 running = !running
                 GrabService.isRunning = running
                 btnMain.text = if (running) "停止监听" else "开启监听"
-                log(if (running) "开始监听 · ${MODE_NAMES[GrabService.currentMode]}模式" else "已停止监听")
+                log(if (running) "开启监听 · ${MODE_NAMES[GrabService.currentMode]}模式" else "已停止监听")
                 refreshStatus()
             }
         }
@@ -119,8 +119,8 @@ class MainActivity : AppCompatActivity() {
 
         val line1 = if (running && isAccOn()) "♟️ 模式：${modeName} 运行中"
                      else "♟️ 模式：${modeName} 待启动"
-        val line2 = "🕐 今日：命中 $today 发 · 末发 $lastStr"
-        val line3 = "🏆 累计：$total 发"
+        val line2 = "🕐 今日：命中 $today 发  $lastStr"
+        val line3 = "🏆 累计：命中 $total 发"
         tvStatus.text = "$line1\n$line2\n$line3"
     }
 
