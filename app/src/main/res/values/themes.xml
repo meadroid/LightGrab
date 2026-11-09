@@ -16,4 +16,28 @@
         <item name="android:background">@color/grayChip</item>
         <item name="android:textColor">@color/grayText</item>
     </style>
+
+    <style name="SettingLabel">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:textSize">13sp</item>
+        <item name="android:textColor">@color/grayText</item>
+        <item name="android:layout_marginTop">14dp</item>
+    </style>
+
+    <style name="SettingInput">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:textColor">@color/ink</item>
+        <item name="android:layout_marginTop">4dp</item>
+    </style>
+
+    <style name="SettingPerm">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:textSize">13sp</item>
+        <item name="android:textColor">@color/grayText</item>
+        <item name="android:layout_marginTop">6dp</item>
+    </style>
 </resources>
