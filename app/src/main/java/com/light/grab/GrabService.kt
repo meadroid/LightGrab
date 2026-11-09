@@ -5,10 +5,15 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.os.Build
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class GrabService : AccessibilityService() {
 
@@ -18,12 +23,19 @@ class GrabService : AccessibilityService() {
 
         @Volatile
         var currentMode: Int = MainActivity.MODE_SHADOW
+
+        @Volatile
+        var isRunning: Boolean = false
     }
+
+    private lateinit var sp: SharedPreferences
+    private var lastFire = 0L
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        sp = getSharedPreferences("lightdot", Context.MODE_PRIVATE)
         startFg()
-        log("[服务] 已连接，模式=$currentMode")
+        log("[服务] 已连接，模式=${MainActivity.MODE_NAMES[currentMode]}")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -34,24 +46,62 @@ class GrabService : AccessibilityService() {
         when (currentMode) {
             MainActivity.MODE_SHADOW -> log("[影子]发现窗口 pkg=$pkg")
             MainActivity.MODE_SENTRY -> log("[哨兵]监听中 pkg=$pkg")
-            MainActivity.MODE_SNIPER -> tryGrab(event)
+            MainActivity.MODE_SNIPER -> if (isRunning) tryGrab(event)
+            MainActivity.MODE_LIGHTTAP -> if (isRunning) tryGrab(event, lightTap = true)
             MainActivity.MODE_SILENT -> log("[静默]事件 pkg=$pkg")
         }
     }
 
-    private fun tryGrab(event: AccessibilityEvent) {
+    private fun tryGrab(event: AccessibilityEvent, lightTap: Boolean = false) {
+        // 关键词：设置页自定义，没填就用默认列表
+        val custom = sp.getString("keyword", "")?.trim() ?: ""
+        val keywords = if (custom.isNotEmpty()) listOf(custom)
+        else listOf("抢单", "接单", "立即抢")
+
+        // 点击前延时：轻点 = 狙击延时，狙击 = 狙击延时，全部来自设置页，不焊死
+        val delayBefore = sp.getInt("sniper_delay", if (lightTap) 200 else 0).toLong()
+
         val node: AccessibilityNodeInfo = rootInActiveWindow ?: return
-        val keywords = listOf("抢单", "接单", "立即抢")
         for (kw in keywords) {
             val targets = node.findAccessibilityNodeInfosByText(kw)
             if (targets != null && targets.isNotEmpty()) {
-                log("[狙击]命中「$kw」，执行点击")
-                for (t in targets) {
-                    if (t.isClickable) { t.performAction(AccessibilityNodeInfo.ACTION_CLICK); break }
+                val now = System.currentTimeMillis()
+                if (now - lastFire < 300) return // 最小间隔保护，防连点
+                lastFire = now
+
+                log("[${if (lightTap) "轻点" else "狙击"}]命中「$kw」，延时${delayBefore}ms后点击")
+                if (delayBefore > 0) {
+                    node.recycle()
+                    android.os.Handler(mainLooper).postDelayed({ clickTarget(kw) }, delayBefore)
+                    return
                 }
+                clickTarget(kw)
                 return
             }
         }
+    }
+
+    private fun clickTarget(keyword: String) {
+        val node = rootInActiveWindow ?: return
+        val targets = node.findAccessibilityNodeInfosByText(keyword)
+        val t = targets?.firstOrNull()
+        if (t != null) {
+            if (t.isClickable) t.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            else t.parent?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            recordHit()
+            log("[命中] +1")
+        }
+        node.recycle()
+    }
+
+    /** 战绩：今日 + 永久累计（SharedPreferences 持久化，重启/卸载重装前一直累积） */
+    private fun recordHit() {
+        val day = SimpleDateFormat("yyyyMMdd", Locale.CHINA).format(Date())
+        sp.edit()
+            .putInt("hit_$day", sp.getInt("hit_$day", 0) + 1)
+            .putInt("total_hit", sp.getInt("total_hit", 0) + 1)
+            .putLong("last_hit_time", System.currentTimeMillis())
+            .apply()
     }
 
     private fun log(msg: String) {
@@ -63,7 +113,7 @@ class GrabService : AccessibilityService() {
 
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, "轻单前台服务", NotificationManager.IMPORTANCE_LOW)
+            NotificationChannel(CHANNEL_ID, "轻点前台服务", NotificationManager.IMPORTANCE_LOW)
         )
 
         val pi = PendingIntent.getActivity(
@@ -73,8 +123,8 @@ class GrabService : AccessibilityService() {
         )
 
         val n: Notification = Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle("轻单运行中")
-            .setContentText("模式=$currentMode")
+            .setContentTitle("轻点运行中")
+            .setContentText("模式=${MainActivity.MODE_NAMES[currentMode]}")
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentIntent(pi)
             .setOngoing(true)
