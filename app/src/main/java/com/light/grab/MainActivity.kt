@@ -5,8 +5,6 @@ import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.provider.Settings
-import android.view.Menu
-import android.view.MenuItem
 import android.view.accessibility.AccessibilityManager
 import android.widget.Button
 import android.widget.ScrollView
@@ -25,13 +23,13 @@ class MainActivity : AppCompatActivity() {
             "顺丰骑士" to "com.sfexpress.sfapp",
             "美团骑手" to "com.sankuai.meituan.takeoutnew.rider"
         )
+
+        val MODE_NAMES = listOf("影子", "哨兵", "狙击", "静默")
     }
 
     private lateinit var tvLog: TextView
     private lateinit var logScroll: ScrollView
     private val logBuf = StringBuilder()
-    var currentMode = MODE_SHADOW
-        private set
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -40,28 +38,23 @@ class MainActivity : AppCompatActivity() {
         tvLog = findViewById(R.id.tvLog)
         logScroll = findViewById(R.id.logScroll)
 
-        findViewById<TextView>(R.id.chipShadow).setOnClickListener { setMode(MODE_SHADOW) }
-        findViewById<TextView>(R.id.chipSentry).setOnClickListener { setMode(MODE_SENTRY) }
-        findViewById<TextView>(R.id.chipSniper).setOnClickListener { setMode(MODE_SNIPER) }
-        findViewById<TextView>(R.id.chipSilent).setOnClickListener { setMode(MODE_SILENT) }
+        findViewById<TextView>(R.id.chipShadow).setOnClickListener { setMode(MainActivity.MODE_SHADOW) }
+        findViewById<TextView>(R.id.chipSentry).setOnClickListener { setMode(MainActivity.MODE_SENTRY) }
+        findViewById<TextView>(R.id.chipSniper).setOnClickListener { setMode(MainActivity.MODE_SNIPER) }
+        findViewById<TextView>(R.id.chipSilent).setOnClickListener { setMode(MainActivity.MODE_SILENT) }
 
         val btn = findViewById<Button>(R.id.btnMain)
         btn.setOnClickListener {
-            if (isAccOn()) {
-                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-            } else {
-                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-            }
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }
 
-        setMode(MODE_SHADOW)
+        setMode(MainActivity.MODE_SHADOW)
         log("轻单已启动")
     }
 
     private fun setMode(mode: Int) {
-        currentMode = mode
-        val names = listOf("影子", "哨兵", "狙击", "静默")
-        log("模式切换 → ${names[mode]}")
+        GrabService.currentMode = mode   // 关键：同步给服务
+        log("模式切换 → ${MODE_NAMES[mode]}")
     }
 
     private fun isAccOn(): Boolean {
@@ -78,23 +71,6 @@ class MainActivity : AppCompatActivity() {
             if (logBuf.length > 8000) logBuf.setLength(8000)
             tvLog.text = logBuf.toString()
             logScroll.scrollTo(0, 0)
-        }
-    }
-
-    override fun onCreateOptionsMenu(menu: Menu): Boolean {
-        menuInflater.inflate(R.menu.menu_main, menu)
-        return true
-    }
-
-    override fun onOptionsItemSelected(item: MenuItem): Boolean {
-        return when (item.itemId) {
-            R.id.action_open_acc -> {
-                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); true
-            }
-            R.id.action_clear_log -> {
-                logBuf.setLength(0); tvLog.text = ""; true
-            }
-            else -> super.onOptionsItemSelected(item)
         }
     }
 }
