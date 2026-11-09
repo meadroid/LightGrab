@@ -1,69 +1,135 @@
 package com.light.grab
 
-import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.os.Bundle
 import android.provider.Settings
-import android.widget.ArrayAdapter
-import android.widget.Button
+import android.text.InputType
 import android.widget.EditText
-import android.widget.Spinner
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 
 class SettingsActivity : AppCompatActivity() {
 
     private lateinit var sp: SharedPreferences
+    private lateinit var tvApp: TextView
+    private lateinit var tvKeyword: TextView
+    private lateinit var tvSentryDelay: TextView
+    private lateinit var tvSniperDelay: TextView
+
+    private val appNames = listOf("顺丰骑士", "美团骑手", "全部应用")
+    private val appKeys = MainActivity.APPS.values.toList() + "all"
+    private var appIndex = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_settings)
-        sp = getSharedPreferences("lightdot", Context.MODE_PRIVATE)
 
-        val spinApp = findViewById<Spinner>(R.id.spinTargetApp)
-        val etKeyword = findViewById<EditText>(R.id.etKeyword)
-        val etSentry = findViewById<EditText>(R.id.etSentryDelay)
-        val etSniper = findViewById<EditText>(R.id.etSniperDelay)
-        val tvAcc = findViewById<TextView>(R.id.tvAccPerm)
-        val tvNoti = findViewById<TextView>(R.id.tvNotiPerm)
+        sp = getSharedPreferences("lightdot", MODE_PRIVATE)
+        appIndex = sp.getInt("app_index", appKeys.size - 1) // 默认全部应用
 
-        // 目标应用：常用列表 + 可自由选（第一项「全部应用」）
-        val apps = listOf("全部应用", "微信", "美团", "饿了么", "滴滴", "货拉拉")
-        spinApp.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, apps)
-        sp.getString("target_app", "全部应用")?.let { saved ->
-            apps.indexOf(saved).takeIf { it >= 0 }?.let { spinApp.setSelection(it) }
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(28), dp(20), dp(20))
+            setBackgroundColor(getColor(R.color.bgDark))
         }
 
-        etKeyword.setText(sp.getString("keyword", ""))
-        etSentry.setText(sp.getInt("sentry_delay", 500).toString())
-        etSniper.setText(sp.getInt("sniper_delay", 200).toString())
+        val title = TextView(this).apply {
+            text = "设置"
+            textSize = 22f
+            setTextColor(getColor(R.color.mint))
+            setPadding(0, 0, 0, dp(20))
+        }
+        root.addView(title)
 
-        val accOk = Settings.Secure.getString(
-            contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        )?.contains(packageName) == true
-        tvAcc.text = "无障碍权限：" + if (accOk) "✓ 已开启" else "未开启（点下方保存后去菜单开启）"
+        tvApp = makeRow(root, "目标应用")
+        tvKeyword = makeRow(root, "关键词")
+        tvSentryDelay = makeRow(root, "哨兵延时")
+        tvSniperDelay = makeRow(root, "狙击延时")
+        val tvPerm = makeRow(root, "无障碍权限")
 
-        val notiOk = Settings.Secure.getInt(
-            contentResolver, "enabled_notification_listeners", 0
-        ) != 0
-        tvNoti.text = "通知监听权限：" + if (notiOk) "✓ 已开启" else "未开启"
-        tvNoti.setOnClickListener {
-            startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+        refreshRows()
+
+        tvApp.setOnClickListener {
+            appIndex = (appIndex + 1) % appKeys.size
+            sp.edit().putInt("app_index", appIndex).apply()
+            refreshRows()
         }
 
-        findViewById<Button>(R.id.btnSave).setOnClickListener {
-            val sentry = etSentry.text.toString().toIntOrNull() ?: 500
-            val sniper = etSniper.text.toString().toIntOrNull() ?: 200
-            sp.edit()
-                .putString("target_app", spinApp.selectedItem.toString())
-                .putString("keyword", etKeyword.text.toString().trim())
-                .putInt("sentry_delay", sentry.coerceIn(0, 10000))
-                .putInt("sniper_delay", sniper.coerceIn(0, 10000))
-                .apply()
-            Toast.makeText(this, "已保存", Toast.LENGTH_SHORT).show()
-            finish()
+        tvKeyword.setOnClickListener {
+            val input = EditText(this).apply {
+                inputType = InputType.TYPE_CLASS_TEXT
+                setText(sp.getString("keyword", ""))
+                setSingleLine(true)
+            }
+            AlertDialog.Builder(this)
+                .setTitle("关键词（点中按钮上的文字）")
+                .setView(input)
+                .setPositiveButton("保存") { _, _ ->
+                    sp.edit().putString("keyword", input.text.toString().trim()).apply()
+                    refreshRows()
+                    Toast.makeText(this, "已保存", Toast.LENGTH_SHORT).show()
+                }
+                .setNegativeButton("取消", null)
+                .show()
         }
+
+        tvSentryDelay.setOnClickListener { askDelay("哨兵延时（毫秒）", "sentry_delay") }
+        tvSniperDelay.setOnClickListener { askDelay("狙击延时（毫秒）", "sniper_delay") }
+
+        tvPerm.setOnClickListener {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }
+
+        setContentView(root)
     }
+
+    private fun askDelay(title: String, key: String) {
+        val input = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER
+            hint = "0 - 10000 毫秒"
+            setText(sp.getInt(key, 0).toString())
+        }
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setView(input)
+            .setPositiveButton("保存") { _, _ ->
+                val v = input.text.toString().toIntOrNull()?.coerceIn(0, 10000) ?: 0
+                sp.edit().putInt(key, v).apply()
+                refreshRows()
+                Toast.makeText(this, "已保存 ${v}ms", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun refreshRows() {
+        tvApp.text = "目标应用\n${appNames.getOrElse(appIndex) { "全部应用" }}"
+        val kw = sp.getString("keyword", "")?.takeIf { it.isNotEmpty() } ?: "抢单 / 接单 / 立即抢"
+        tvKeyword.text = "关键词\n$kw"
+        tvSentryDelay.text = "哨兵延时\n${sp.getInt("sentry_delay", 500)} 毫秒"
+        tvSniperDelay.text = "狙击延时\n${sp.getInt("sniper_delay", 0)} 毫秒"
+        tvSniperDelay.post { } // noop
+    }
+
+    private fun makeRow(root: LinearLayout, label: String): TextView {
+        val tv = TextView(this).apply {
+            textSize = 16f
+            setTextColor(getColor(R.color.grayText))
+            setPadding(dp(16), dp(16), dp(16), dp(16))
+            background = getDrawable(android.R.drawable.dialog_halo_light)
+            setBackgroundColor(getColor(R.color.grayChip))
+        }
+        val lp = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        )
+        lp.setMargins(0, 0, 0, dp(12))
+        tv.layoutParams = lp
+        root.addView(tv)
+        return tv
+    }
+
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 }
