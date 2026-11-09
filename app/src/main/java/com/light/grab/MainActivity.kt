@@ -10,7 +10,6 @@ import android.provider.Settings
 import android.view.Menu
 import android.view.MenuItem
 import android.widget.Button
-import android.widget.ImageButton
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -24,11 +23,6 @@ class MainActivity : AppCompatActivity() {
         const val MODE_SENTRY = 1    // 哨兵：发现弹窗
         const val MODE_SNIPER = 2    // 狙击：自动点击抢单
         const val MODE_SILENT = 3    // 静默：仅记录
-
-        val APPS = mapOf(
-            "顺丰骑士" to "com.sfexpress.sfapp",
-            "美团骑手" to "com.sankuai.meituan.takeoutnew.rider"
-        )
 
         val MODE_NAMES = listOf("影子", "哨兵", "狙击", "静默")
         val CHIP_IDS = listOf(
@@ -79,8 +73,8 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 日志区右上角小图标：点击复制日志
-        findViewById<ImageButton>(R.id.btnCopyLog).setOnClickListener {
+        // 日志区右上角小图标（⎘）：点击复制日志
+        findViewById<TextView>(R.id.btnCopyLog).setOnClickListener {
             val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             cm.setPrimaryClip(ClipData.newPlainText("log", tvLog.text))
             Toast.makeText(this, "日志已复制", Toast.LENGTH_SHORT).show()
@@ -110,19 +104,17 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshStatus() {
         val modeName = MODE_NAMES[GrabService.currentMode]
-        val day = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.CHINA)
-            .format(java.util.Date())
-        val today = sp.getInt("hit_$day", 0)
-        val total = sp.getInt("total_hit", 0)
         val last = sp.getLong("last_hit_time", 0L)
         val lastStr = if (last > 0)
-            java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.CHINA).format(java.util.Date(last))
+            java.text.SimpleDateFormat("MM-dd HH:mm:ss", java.util.Locale.CHINA)
+                .format(java.util.Date(last))
         else "无"
+        val total = sp.getInt("total_hit", 0)
 
-        // 三行：图标 + 全角冒号，等宽字体下自动对齐
-        val line1 = if (running && isAccOn()) "◉ 模式：${modeName}运行中"
-                     else "○ 模式：${modeName}待启动"
-        val line2 = "📅 今日：命中 $today 发 · 末发 $lastStr"
+        // 三行统一 emoji 前缀，等宽字体下自然对齐
+        val line1 = if (running && isAccOn()) "🟢 模式：${modeName} 运行中"
+                     else "⚪ 模式：${modeName} 待启动"
+        val line2 = "🕐 最后命中：$lastStr"
         val line3 = "🏆 累计：共命中 $total 发"
         tvStatus.text = "$line1\n$line2\n$line3"
     }
@@ -143,7 +135,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ===== 武器库菜单 =====
+    // ===== 武器库菜单：二级直连各自设置 =====
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.menu_main, menu)
         return true
@@ -151,23 +143,22 @@ class MainActivity : AppCompatActivity() {
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return when (item.itemId) {
-            R.id.action_target -> {                       // 狙击目标
-                startActivity(Intent(this, SettingsActivity::class.java)); true
-            }
-            R.id.action_keyword -> {                      // 关键词
-                startActivity(Intent(this, SettingsActivity::class.java)); true
-            }
-            R.id.action_sentry_delay -> {                 // 哨兵延时
-                startActivity(Intent(this, SettingsActivity::class.java)); true
-            }
-            R.id.action_sniper_delay -> {                 // 狙击延时
-                startActivity(Intent(this, SettingsActivity::class.java)); true
-            }
-            R.id.action_permission -> {                   // 开启权限
+            R.id.action_target -> openSettings("app")
+            R.id.action_keyword -> openSettings("keyword")
+            R.id.action_sentry_delay -> openSettings("sentry")
+            R.id.action_sniper_delay -> openSettings("sniper")
+            R.id.action_permission -> {
                 startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); true
             }
             else -> super.onOptionsItemSelected(item)
         }
+    }
+
+    private fun openSettings(which: String): Boolean {
+        startActivity(
+            Intent(this, SettingsActivity::class.java).putExtra("open", which)
+        )
+        return true
     }
 }
 
