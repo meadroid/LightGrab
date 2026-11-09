@@ -8,20 +8,11 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="轻单 · 抢单助手"
-        android:textSize="22sp"
+        android:text="@string/title_text"
+        android:textSize="15sp"
         android:textStyle="bold"
         android:textColor="@color/ink"
-        android:layout_marginBottom="4dp" />
-
-    <TextView
-        android:id="@+id/tvStatus"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="服务未运行"
-        android:textSize="13sp"
-        android:textColor="@color/grayText"
-        android:layout_marginBottom="12dp" />
+        android:layout_marginBottom="6dp" />
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -41,6 +32,10 @@
             android:text="狙击" />
 
         <TextView style="@style/Chip"
+            android:id="@+id/chipLightTap"
+            android:text="轻点" />
+
+        <TextView style="@style/Chip"
             android:id="@+id/chipSilent"
             android:text="静默" />
     </LinearLayout>
@@ -54,23 +49,49 @@
         android:textColor="@color/mintTextOn"
         android:text="开启监听" />
 
-    <ScrollView
-        android:id="@+id/logScroll"
+    <TextView
+        android:id="@+id/tvStatus"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="14dp"
+        android:lineSpacingExtra="3dp"
+        android:textSize="13sp"
+        android:textColor="@color/grayText"
+        android:text="服务未运行" />
+
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:layout_marginTop="16dp"
-        android:background="@color/mintBg"
-        android:padding="10dp">
+        android:layout_marginTop="12dp">
 
-        <TextView
-            android:id="@+id/tvLog"
+        <ScrollView
+            android:id="@+id/logScroll"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textSize="12sp"
-            android:textColor="@color/ink"
-            android:fontFamily="monospace"
-            android:text="" />
-    </ScrollView>
+            android:layout_height="match_parent"
+            android:background="@color/mintBg"
+            android:padding="10dp">
+
+            <TextView
+                android:id="@+id/tvLog"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textSize="12sp"
+                android:textColor="@color/ink"
+                android:fontFamily="monospace"
+                android:text="" />
+        </ScrollView>
+
+        <ImageButton
+            android:id="@+id/btnCopyLog"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:layout_gravity="top|end"
+            android:layout_margin="6dp"
+            android:background="?attr/selectableItemBackgroundBorderless"
+            android:contentDescription="@string/btn_copy_log"
+            android:src="@android:drawable/ic_menu_save"
+            android:tint="@color/grayText" />
+    </FrameLayout>
 
 </LinearLayout>
