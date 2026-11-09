@@ -78,8 +78,12 @@ class SettingsActivity : AppCompatActivity() {
                 .show()
         }
 
-        tvSentryDelay.setOnClickListener { askDelay("哨兵延时（毫秒）", "sentry_delay") }
-        tvSniperDelay.setOnClickListener { askDelay("狙击延时（毫秒）", "sniper_delay") }
+        tvSentryDelay.setOnClickListener {
+            askDelay("哨兵延时（最低~最高）", "sentry_delay_min", "sentry_delay_max")
+        }
+        tvSniperDelay.setOnClickListener {
+            askDelay("狙击延时（最低~最高）", "sniper_delay_min", "sniper_delay_max")
+        }
 
         tvPerm.setOnClickListener {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
@@ -88,20 +92,34 @@ class SettingsActivity : AppCompatActivity() {
         setContentView(root)
     }
 
-    private fun askDelay(title: String, key: String) {
-        val input = EditText(this).apply {
+    /** 双输入框：最低值 + 最高值，区间内随机延时 */
+    private fun askDelay(title: String, keyMin: String, keyMax: String) {
+        val minInput = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_NUMBER
-            hint = "0 - 10000 毫秒"
-            setText(sp.getInt(key, 0).toString())
+            hint = "最低值（毫秒）"
+            setText(sp.getInt(keyMin, 0).toString())
+        }
+        val maxInput = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER
+            hint = "最高值（毫秒）"
+            setText(sp.getInt(keyMax, 500).toString())
+        }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(10), dp(24), 0)
+            addView(minInput)
+            addView(maxInput)
         }
         AlertDialog.Builder(this)
             .setTitle(title)
-            .setView(input)
+            .setView(box)
             .setPositiveButton("保存") { _, _ ->
-                val v = input.text.toString().toIntOrNull()?.coerceIn(0, 10000) ?: 0
-                sp.edit().putInt(key, v).apply()
+                val min = minInput.text.toString().toIntOrNull()?.coerceIn(0, 10000) ?: 0
+                var max = maxInput.text.toString().toIntOrNull()?.coerceIn(0, 10000) ?: 500
+                if (max < min) max = min // 保底：最高不能低于最低
+                sp.edit().putInt(keyMin, min).putInt(keyMax, max).apply()
                 refreshRows()
-                Toast.makeText(this, "已保存 ${v}ms", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "已保存 ${min}~${max}ms", Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton("取消", null)
             .show()
@@ -111,8 +129,8 @@ class SettingsActivity : AppCompatActivity() {
         tvApp.text = "目标应用\n${appNames.getOrElse(appIndex) { "全部应用" }}"
         val kw = sp.getString("keyword", "")?.takeIf { it.isNotEmpty() } ?: "抢单 / 接单 / 立即抢"
         tvKeyword.text = "关键词\n$kw"
-        tvSentryDelay.text = "哨兵延时\n${sp.getInt("sentry_delay", 500)} 毫秒"
-        tvSniperDelay.text = "狙击延时\n${sp.getInt("sniper_delay", 0)} 毫秒"
+        tvSentryDelay.text = "哨兵延时\n${sp.getInt("sentry_delay_min", 300)} ~ ${sp.getInt("sentry_delay_max", 800)} 毫秒"
+        tvSniperDelay.text = "狙击延时\n${sp.getInt("sniper_delay_min", 0)} ~ ${sp.getInt("sniper_delay_max", 200)} 毫秒"
     }
 
     private fun makeRow(root: LinearLayout, label: String): TextView {
@@ -120,7 +138,6 @@ class SettingsActivity : AppCompatActivity() {
             textSize = 16f
             setTextColor(Color.parseColor("#B8C4BD"))
             setPadding(dp(16), dp(16), dp(16), dp(16))
-            // 不再引用系统图标，直接用纯色圆角底
             background = ColorDrawable(Color.parseColor("#1E2A24"))
         }
         val lp = LinearLayout.LayoutParams(
