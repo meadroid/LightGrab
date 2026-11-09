@@ -6,46 +6,71 @@
     android:padding="16dp">
 
     <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="轻单 · 抢单助手"
+        android:textSize="22sp"
+        android:textStyle="bold"
+        android:textColor="@color/ink"
+        android:layout_marginBottom="4dp" />
+
+    <TextView
         android:id="@+id/tvStatus"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="● 状态未知"
-        android:textSize="20sp"
-        android:textStyle="bold"
-        android:padding="12dp" />
+        android:text="服务未运行"
+        android:textSize="13sp"
+        android:textColor="@color/grayText"
+        android:layout_marginBottom="12dp" />
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:layout_marginTop="12dp">
+        android:orientation="horizontal">
 
-        <Button
-            android:id="@+id/btnStart"
-            android:layout_width="0dp"
-            android:layout_weight="1"
-            android:layout_height="wrap_content"
-            android:text="启动" />
+        <TextView style="@style/Chip"
+            android:id="@+id/chipShadow"
+            android:text="影子" />
 
-        <Button
-            android:id="@+id/btnStop"
-            android:layout_width="0dp"
-            android:layout_weight="1"
-            android:layout_height="wrap_content"
-            android:text="停止" />
+        <TextView style="@style/Chip"
+            android:id="@+id/chipSentry"
+            android:text="哨兵" />
 
+        <TextView style="@style/Chip"
+            android:id="@+id/chipSniper"
+            android:text="狙击" />
+
+        <TextView style="@style/Chip"
+            android:id="@+id/chipSilent"
+            android:text="静默" />
     </LinearLayout>
 
-    <TextView
-        android:id="@+id/tvLog"
+    <Button
+        android:id="@+id/btnMain"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:layout_marginTop="16dp"
+        android:backgroundTint="@color/mint"
+        android:textColor="@color/mintTextOn"
+        android:text="开启监听" />
+
+    <ScrollView
+        android:id="@+id/logScroll"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:layout_marginTop="12dp"
-        android:background="#F5F5F5"
-        android:padding="8dp"
-        android:text="— 就绪 —"
-        android:textSize="13sp"
-        android:gravity="top" />
+        android:layout_marginTop="16dp"
+        android:background="@color/mintBg"
+        android:padding="10dp">
+
+        <TextView
+            android:id="@+id/tvLog"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textSize="12sp"
+            android:textColor="@color/ink"
+            android:fontFamily="monospace"
+            android:text="" />
+    </ScrollView>
 
 </LinearLayout>
