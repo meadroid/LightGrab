@@ -45,12 +45,9 @@ class GrabService : AccessibilityService() {
         event ?: return
         val pkg = event.packageName?.toString() ?: return
 
-        // 目标应用过滤
-        val appIndex = sp.getInt("app_index", MainActivity.APPS.size)
-        if (appIndex < MainActivity.APPS.size) {
-            val target = MainActivity.APPS.values.toList()[appIndex]
-            if (!pkg.contains(target)) return
-        }
+        // 目标应用过滤（按包名，用户自选；未选择时不过滤，监听全部应用）
+        val targetPkg = sp.getString("app_pkg", null)
+        if (targetPkg != null && pkg != targetPkg) return
 
         when (currentMode) {
             MainActivity.MODE_SHADOW -> tryGrab(event, realClick = false)  // 测试线路：不真点
