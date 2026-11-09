@@ -4,7 +4,7 @@
         <item name="colorPrimary">@color/mint</item>
         <item name="colorAccent">@color/mint</item>
         <item name="android:windowBackground">@color/bgDark</item>
-        <item name="android:actionBarStyle">@style/LightGrabActionBar</item>
+        <item name="actionBarStyle">@style/LightGrabActionBar</item>
         <item name="actionBarSize">40dp</item>
     </style>
 
@@ -16,7 +16,7 @@
 
     <style name="ActionBarTitle" parent="TextAppearance.AppCompat.Widget.ActionBar.Title">
         <item name="android:textSize">13sp</item>
-        <item name="android:textColor">@color/ink</item>
+        <item name="android:textColor">@color/grayText</item>
     </style>
 
     <style name="Chip">
