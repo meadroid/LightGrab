@@ -1,6 +1,7 @@
 package com.light.grab
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -8,6 +9,8 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.graphics.Path
+import android.graphics.Rect
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -43,21 +46,30 @@ class GrabService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
+
+        // 只处理窗口切换和内容变化，避免每秒几十次无效全页搜索
+        val t = event.eventType
+        if (t != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+            t != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED &&
+            t != AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
+        ) return
+
         val pkg = event.packageName?.toString() ?: return
+        if (pkg == packageName) return  // 忽略自己界面的变化，防止死循环
 
         // 目标应用过滤（按包名，用户自选；未选择时不过滤，监听全部应用）
         val targetPkg = sp.getString("app_pkg", null)
         if (targetPkg != null && pkg != targetPkg) return
 
         when (currentMode) {
-            MainActivity.MODE_SHADOW -> tryGrab(event, realClick = false)  // 测试线路：不真点
-            MainActivity.MODE_SENTRY   -> tryGrab(event, realClick = true) // 哨兵抢单
-            MainActivity.MODE_SNIPER   -> if (isRunning) tryGrab(event, realClick = true) // 狙击抢单
-            MainActivity.MODE_SILENT   -> { /* 静默：休眠，什么都不做 */ }
+            MainActivity.MODE_SHADOW -> tryGrab(realClick = false)  // 测试线路：不真点
+            MainActivity.MODE_SENTRY -> if (isRunning) tryGrab(realClick = true)  // 哨兵抢单
+            MainActivity.MODE_SNIPER -> if (isRunning) tryGrab(realClick = true)  // 狙击抢单
+            MainActivity.MODE_SILENT -> { /* 静默：休眠，什么都不做 */ }
         }
     }
 
-    private fun tryGrab(event: AccessibilityEvent, realClick: Boolean) {
+    private fun tryGrab(realClick: Boolean) {
         val custom = sp.getString("keyword", "")?.trim() ?: ""
         val keywords = if (custom.isNotEmpty()) listOf(custom)
         else listOf("抢单", "接单", "立即抢")
@@ -92,17 +104,32 @@ class GrabService : AccessibilityService() {
         node.recycle()
     }
 
+    /** 坐标手势点击：先找节点中心，再模拟真实手指按下，兼容一切控件 */
     private fun clickTarget(keyword: String) {
         val node = rootInActiveWindow ?: return
-        val targets = node.findAccessibilityNodeInfosByText(keyword)
-        val t = targets?.firstOrNull()
-        if (t != null) {
-            if (t.isClickable) t.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            else t.parent?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            recordHit()
-            log("[命中] +1")
+        val t = node.findAccessibilityNodeInfosByText(keyword)?.firstOrNull()
+        if (t == null) {
+            node.recycle()
+            log("[命中] 点击时目标已消失")
+            return
         }
+
+        val r = Rect()
+        t.getBoundsInScreen(r)
         node.recycle()
+
+        if (r.isEmpty) {
+            log("[命中] 目标区域无效")
+            return
+        }
+
+        val path = Path().apply { moveTo(r.exactCenterX(), r.exactCenterY()) }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 50))
+            .build()
+        dispatchGesture(gesture, null, null)
+        recordHit()
+        log("[命中] +1 → (${r.exactCenterX().toInt()}, ${r.exactCenterY().toInt()})")
     }
 
     private fun recordHit() {
@@ -114,8 +141,14 @@ class GrabService : AccessibilityService() {
             .apply()
     }
 
+    /** 写 logcat + 写 SP，让 MainActivity 能读到 */
     private fun log(msg: String) {
         android.util.Log.d("LightGrab", msg)
+        val time = SimpleDateFormat("HH:mm:ss", Locale.CHINA).format(Date())
+        val old = sp.getString("svc_logs", "") ?: ""
+        var newLogs = "$old\n$time  $msg"
+        if (newLogs.length > 8000) newLogs = newLogs.substring(newLogs.length - 8000)
+        sp.edit().putString("svc_logs", newLogs).apply()
     }
 
     private fun startFg() {
