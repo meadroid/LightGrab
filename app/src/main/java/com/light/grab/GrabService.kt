@@ -47,7 +47,7 @@ class GrabService : AccessibilityService() {
 
     override fun onInterrupt() {}
 
-    // ---------- 心跳：不依赖顺丰事件，每 1.5 秒自己看一眼屏幕 ----------
+    // ---------- 心跳：每 1.5 秒自己扫一遍屏幕，不等顺丰喂事件 ----------
 
     private fun startHeartbeat() {
         mainHandler.postDelayed(object : Runnable {
@@ -97,7 +97,7 @@ class GrabService : AccessibilityService() {
         detect()
     }
 
-    /** 检测弹窗；锁定期内安排延时复查，事件不丢失 */
+    /** 检测弹窗；锁定期内由看门狗/补扫接管，事件不丢失 */
     private fun detect(): Boolean {
         if (pending) {
             // 看门狗：pending 超 5 秒 = 卡死，强制复位
@@ -137,6 +137,7 @@ class GrabService : AccessibilityService() {
         var done = false
         var hitBtnKw = ""
         try {
+            // 最多重试 8 次 × 120ms ≈ 1 秒，等弹窗按钮渲染完
             for (i in 1..8) {
                 val roots = ArrayList<AccessibilityNodeInfo?>()
                 try { roots.add(rootInActiveWindow) } catch (ex: Exception) {}
@@ -148,20 +149,30 @@ class GrabService : AccessibilityService() {
                         val nodes = try { root.findAccessibilityNodeInfosByText(kw) } catch (ex: Exception) { null }
                         if (nodes != null && nodes.isNotEmpty()) {
                             val btn = nodes[nodes.size - 1]
-                            // 文字节点可能不可点，往上找可点击的父节点
-                            var target: AccessibilityNodeInfo = btn
-                            var p = btn.parent
-                            var hops = 0
-                            while (p != null && hops < 5) {
-                                if (p.isClickable) { target = p; break }
-                                p = p.parent; hops++
-                            }
                             val rect = Rect()
-                            target.getBoundsInScreen(rect)
+                            btn.getBoundsInScreen(rect)
+
+                            // ===== 三层递进点击策略 =====
+                            // 第一层：文字节点自己就能点
+                            var target: AccessibilityNodeInfo? = if (btn.isClickable) btn else null
+                            // 第二层：向上爬最多5层，找可点击的父节点
+                            if (target == null) {
+                                var p = btn.parent
+                                var hops = 0
+                                while (p != null && hops < 5) {
+                                    if (p.isClickable) { target = p; break }
+                                    p = p.parent; hops++
+                                }
+                            }
                             lastClick = System.currentTimeMillis()
                             var ok = false
-                            try { ok = target.performAction(AccessibilityNodeInfo.ACTION_CLICK) } catch (ex: Exception) {}
-                            if (!ok) { try { scatterClick(rect) } catch (ex: Exception) {} }
+                            if (target != null) {
+                                try { ok = target.performAction(AccessibilityNodeInfo.ACTION_CLICK) } catch (ex: Exception) {}
+                            }
+                            // 第三层：前面没点成就补一记坐标手势，只要文字在屏上就能点到
+                            if (!ok && rect.width() > 0 && rect.height() > 0) {
+                                try { scatterClick(rect) } catch (ex: Exception) {}
+                            }
                             done = true
                             hitBtnKw = kw
                             break@outer
@@ -179,7 +190,7 @@ class GrabService : AccessibilityService() {
 
         log(if (done) "点[$hitBtnKw] 完成 ✅" else "⚠️ 未找到按钮 ${Config.btnKeywords}")
 
-        // 点成或没点成，都安排 250ms 后复查，弹窗挂着就持续抓
+        // 点成或没点成，都安排 250ms 后复查：弹窗还挂着就持续抓，不彻底停
         mainHandler.postDelayed({ detect() }, 250)
     }
 
