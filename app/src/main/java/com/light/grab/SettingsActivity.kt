@@ -97,7 +97,10 @@ class SettingsActivity : AppCompatActivity() {
         val pm = packageManager
         val apps = pm.getInstalledPackages(0)
             .filter { pm.getLaunchIntentForPackage(it.packageName) != null }
-            .map { it.applicationInfo.loadLabel(pm).toString() to it.packageName }
+            .map {
+                val name = it.applicationInfo?.loadLabel(pm)?.toString() ?: it.packageName
+                name to it.packageName
+            }
             .sortedBy { it.first }
 
         val names = apps.map { it.first }.toTypedArray()
