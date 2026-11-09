@@ -9,6 +9,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import java.text.SimpleDateFormat
@@ -30,6 +32,7 @@ class GrabService : AccessibilityService() {
 
     private lateinit var sp: SharedPreferences
     private var lastFire = 0L
+    private val handler = Handler(Looper.getMainLooper())
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -41,25 +44,30 @@ class GrabService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
         val pkg = event.packageName?.toString() ?: return
-        if (MainActivity.APPS.values.none { pkg.contains(it) }) return
+
+        // 目标应用过滤：读设置页选择，all = 全部应用
+        val appIndex = sp.getInt("app_index", MainActivity.APPS.size) // 默认全部应用
+        if (appIndex < MainActivity.APPS.size) {
+            val target = MainActivity.APPS.values.toList()[appIndex]
+            if (!pkg.contains(target)) return
+        }
 
         when (currentMode) {
             MainActivity.MODE_SHADOW -> log("[影子]发现窗口 pkg=$pkg")
             MainActivity.MODE_SENTRY -> log("[哨兵]监听中 pkg=$pkg")
             MainActivity.MODE_SNIPER -> if (isRunning) tryGrab(event)
-            MainActivity.MODE_LIGHTTAP -> if (isRunning) tryGrab(event, lightTap = true)
             MainActivity.MODE_SILENT -> log("[静默]事件 pkg=$pkg")
         }
     }
 
-    private fun tryGrab(event: AccessibilityEvent, lightTap: Boolean = false) {
+    private fun tryGrab(event: AccessibilityEvent) {
         // 关键词：设置页自定义，没填就用默认列表
         val custom = sp.getString("keyword", "")?.trim() ?: ""
         val keywords = if (custom.isNotEmpty()) listOf(custom)
         else listOf("抢单", "接单", "立即抢")
 
-        // 点击前延时：轻点 = 狙击延时，狙击 = 狙击延时，全部来自设置页，不焊死
-        val delayBefore = sp.getInt("sniper_delay", if (lightTap) 200 else 0).toLong()
+        // 点击前延时：来自设置页「狙击延时」，不焊死
+        val delayBefore = sp.getInt("sniper_delay", 0).toLong()
 
         val node: AccessibilityNodeInfo = rootInActiveWindow ?: return
         for (kw in keywords) {
@@ -69,10 +77,10 @@ class GrabService : AccessibilityService() {
                 if (now - lastFire < 300) return // 最小间隔保护，防连点
                 lastFire = now
 
-                log("[${if (lightTap) "轻点" else "狙击"}]命中「$kw」，延时${delayBefore}ms后点击")
+                log("[狙击]命中「$kw」，延时${delayBefore}ms后点击")
                 if (delayBefore > 0) {
                     node.recycle()
-                    android.os.Handler(mainLooper).postDelayed({ clickTarget(kw) }, delayBefore)
+                    handler.postDelayed({ clickTarget(kw) }, delayBefore)
                     return
                 }
                 clickTarget(kw)
@@ -94,7 +102,7 @@ class GrabService : AccessibilityService() {
         node.recycle()
     }
 
-    /** 战绩：今日 + 永久累计（SharedPreferences 持久化，重启/卸载重装前一直累积） */
+    /** 战绩：今日 + 永久累计（SharedPreferences 持久化，重启后数值一直累加不清零） */
     private fun recordHit() {
         val day = SimpleDateFormat("yyyyMMdd", Locale.CHINA).format(Date())
         sp.edit()
