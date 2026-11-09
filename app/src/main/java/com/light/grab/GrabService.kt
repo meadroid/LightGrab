@@ -3,6 +3,7 @@ package com.light.grab
 import android.accessibilityservice.AccessibilityService
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import android.graphics.Rect
 import kotlin.random.Random
 
@@ -12,12 +13,13 @@ class GrabService : AccessibilityService() {
         @Volatile var instance: GrabService? = null
         @Volatile var logHook: ((String) -> Unit)? = null
         private var lastProbeLog = 0L
+        private var lastClick = 0L
     }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        log("🩺 探针版启动 ✅")
+        log("服务已启动 ✅ 纯事件驱动+窗口搜索")
     }
 
     override fun onDestroy() {
@@ -27,35 +29,24 @@ class GrabService : AccessibilityService() {
 
     override fun onInterrupt() {}
 
+    // ==================== 纯事件驱动 ====================
+
     override fun onAccessibilityEvent(e: AccessibilityEvent?) {
-        val pkg = e?.packageName?.toString() ?: return
-        if (pkg != Config.targetPkg) return
-        val type = when (e.eventType) {
-            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> "窗口变化"
-            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> "内容变化"
-            else -> return
+        if (e?.packageName?.toString() != Config.targetPkg) return
+        when (e.eventType) {
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> detect()
         }
-
-        // ★ 探针1：事件进来了没有？限流5秒一条，防刷屏
-        val now = System.currentTimeMillis()
-        if (now - lastProbeLog > 5000) {
-            lastProbeLog = now
-            val root = try { rootInActiveWindow } catch (ex: Exception) { null }
-            log("📡 事件[$type] 根节点=${root?.packageName ?: "NULL❌"}")
-        }
-
-        detect()
     }
 
+    // ==================== 检测：不靠焦点窗口，靠"找到顺丰的窗口" ====================
+
     private fun detect() {
-        val root = try { rootInActiveWindow } catch (ex: Exception) { null } ?: run {
-            // ★ 探针2：事件来了但拿不到根 —— 这是B病实锤
-            log("🕳️ 事件在，但活跃窗口取不到（rootInActiveWindow=NULL）")
-            return
-        }
-        if (root.packageName != Config.targetPkg) {
-            // ★ 探针3：活跃窗口是别的包 —— 顺丰后台，窗口失焦
-            log("🙈 活跃窗口是[${root.packageName}]，不是顺丰")
+        val now = System.currentTimeMillis()
+        if (now - lastClick < 300) return
+
+        val root = findSfRoot() ?: run {
+            probe("🙈 顺丰窗口不在窗口列表中（可能已退出）")
             return
         }
 
@@ -70,13 +61,34 @@ class GrabService : AccessibilityService() {
         }.start()
     }
 
+    /**
+     * ★ 核心药方：遍历系统窗口列表，挑出包名=顺丰的那个窗口根节点。
+     * 不管顺丰在前台还是后台、焦点在谁手上，只要它的窗口还活着就能读到。
+     */
+    private fun findSfRoot(): AccessibilityNodeInfo? {
+        // 优先：活跃窗口如果正好是顺丰，直接用（最快路径）
+        try {
+            val active = rootInActiveWindow
+            if (active != null && active.packageName == Config.targetPkg) return active
+        } catch (ex: Exception) {}
+        // 兜底：在全部窗口里搜顺丰的
+        try {
+            windows?.forEach { w: AccessibilityWindowInfo ->
+                val r = w.root
+                if (r != null && r.packageName == Config.targetPkg) return r
+            }
+        } catch (ex: Exception) {}
+        return null
+    }
+
     private fun clickButton() {
-        val root = try { rootInActiveWindow } catch (ex: Exception) { null } ?: return
+        val root = findSfRoot() ?: return
         for (kw in Config.btnKeywords) {
             val nodes = try { root.findAccessibilityNodeInfosByText(kw) } catch (ex: Exception) { null }
             if (nodes != null) {
                 for (n in nodes) {
                     if (isVisibleOnScreen(n)) {
+                        lastClick = System.currentTimeMillis()
                         tapButton(n)
                         log("点[$kw] 完成 ✅")
                         return
@@ -108,6 +120,8 @@ class GrabService : AccessibilityService() {
         }
     }
 
+    // ==================== 工具 ====================
+
     private fun findVisible(root: AccessibilityNodeInfo, keywords: List<String>): String? {
         for (kw in keywords) {
             val nodes = try { root.findAccessibilityNodeInfosByText(kw) } catch (ex: Exception) { null }
@@ -137,6 +151,15 @@ class GrabService : AccessibilityService() {
                 .build(),
             null, null
         )
+    }
+
+    /** 探针限流：同一句话 5 秒内最多一条，防刷屏 */
+    private fun probe(msg: String) {
+        val now = System.currentTimeMillis()
+        if (now - lastProbeLog > 5000) {
+            lastProbeLog = now
+            log(msg)
+        }
     }
 
     private fun log(msg: String) {
