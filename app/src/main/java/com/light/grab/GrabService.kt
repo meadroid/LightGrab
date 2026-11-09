@@ -11,12 +11,13 @@ class GrabService : AccessibilityService() {
     companion object {
         @Volatile var instance: GrabService? = null
         @Volatile var logHook: ((String) -> Unit)? = null
+        private var lastProbeLog = 0L
     }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        log("服务已启动 ✅ 纯事件驱动")
+        log("🩺 探针版启动 ✅")
     }
 
     override fun onDestroy() {
@@ -26,28 +27,39 @@ class GrabService : AccessibilityService() {
 
     override fun onInterrupt() {}
 
-    // ==================== 纯事件驱动：系统叫一声，看一眼 ====================
-
     override fun onAccessibilityEvent(e: AccessibilityEvent?) {
-        // 只关心顺丰的界面变化事件
-        if (e?.packageName?.toString() != Config.targetPkg) return
-        when (e.eventType) {
-            // 窗口出现/变化/内容变化 —— 弹窗弹出时必发这几种
-            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
-            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
-            AccessibilityEvent.TYPE_VIEW_APPEARED -> detect()
+        val pkg = e?.packageName?.toString() ?: return
+        if (pkg != Config.targetPkg) return
+        val type = when (e.eventType) {
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> "窗口变化"
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> "内容变化"
+            else -> return
         }
+
+        // ★ 探针1：事件进来了没有？限流5秒一条，防刷屏
+        val now = System.currentTimeMillis()
+        if (now - lastProbeLog > 5000) {
+            lastProbeLog = now
+            val root = try { rootInActiveWindow } catch (ex: Exception) { null }
+            log("📡 事件[$type] 根节点=${root?.packageName ?: "NULL❌"}")
+        }
+
+        detect()
     }
 
-    // ==================== 检测 + 点击 ====================
-
     private fun detect() {
-        val root = try { rootInActiveWindow } catch (ex: Exception) { null } ?: return
-        if (root.packageName != Config.targetPkg) return
+        val root = try { rootInActiveWindow } catch (ex: Exception) { null } ?: run {
+            // ★ 探针2：事件来了但拿不到根 —— 这是B病实锤
+            log("🕳️ 事件在，但活跃窗口取不到（rootInActiveWindow=NULL）")
+            return
+        }
+        if (root.packageName != Config.targetPkg) {
+            // ★ 探针3：活跃窗口是别的包 —— 顺丰后台，窗口失焦
+            log("🙈 活跃窗口是[${root.packageName}]，不是顺丰")
+            return
+        }
 
-        // 弹窗关键词必须在屏幕上
         if (findVisible(root, Config.dialogKeywords) == null) return
-        // 按钮关键词也必须在屏幕上
         if (findVisible(root, Config.btnKeywords) == null) return
 
         val delay = Random.nextLong(Config.delayMin.toLong(), Config.delayMax.toLong() + 1)
@@ -75,11 +87,9 @@ class GrabService : AccessibilityService() {
         log("⚠️ 未找到可见按钮")
     }
 
-    /** 节点自点 → 爬可点击的父节点 → 坐标手势保底 */
     private fun tapButton(btn: AccessibilityNodeInfo) {
         val rect = Rect()
         btn.getBoundsInScreen(rect)
-
         var target: AccessibilityNodeInfo? = if (btn.isClickable) btn else null
         if (target == null) {
             var p = btn.parent
@@ -97,8 +107,6 @@ class GrabService : AccessibilityService() {
             try { scatterClick(rect) } catch (ex: Exception) {}
         }
     }
-
-    // ==================== 工具 ====================
 
     private fun findVisible(root: AccessibilityNodeInfo, keywords: List<String>): String? {
         for (kw in keywords) {
