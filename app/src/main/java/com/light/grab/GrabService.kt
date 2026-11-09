@@ -32,7 +32,8 @@ class GrabService : AccessibilityService() {
     // ==================== 纯事件驱动 ====================
 
     override fun onAccessibilityEvent(e: AccessibilityEvent?) {
-        if (e?.packageName?.toString() != Config.targetPkg) return
+        // 多包名：列表里任何一个命中都算
+        if (!Config.isTarget(e?.packageName?.toString())) return
         when (e.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> detect()
@@ -62,20 +63,20 @@ class GrabService : AccessibilityService() {
     }
 
     /**
-     * ★ 核心药方：遍历系统窗口列表，挑出包名=顺丰的那个窗口根节点。
-     * 不管顺丰在前台还是后台、焦点在谁手上，只要它的窗口还活着就能读到。
+     * ★ 核心：遍历系统窗口列表，挑出包名=目标的窗口根节点。
+     * 不管目标 App 在前台还是后台、焦点在谁手上，只要它的窗口还活着就能读到。
      */
     private fun findSfRoot(): AccessibilityNodeInfo? {
-        // 优先：活跃窗口如果正好是顺丰，直接用（最快路径）
+        // 优先：活跃窗口正好是目标，直接用（最快路径）
         try {
             val active = rootInActiveWindow
-            if (active != null && active.packageName == Config.targetPkg) return active
+            if (active != null && Config.isTarget(active.packageName?.toString())) return active
         } catch (ex: Exception) {}
-        // 兜底：在全部窗口里搜顺丰的
+        // 兜底：在全部窗口里搜目标的
         try {
             windows?.forEach { w: AccessibilityWindowInfo ->
                 val r = w.root
-                if (r != null && r.packageName == Config.targetPkg) return r
+                if (r != null && Config.isTarget(r.packageName?.toString())) return r
             }
         } catch (ex: Exception) {}
         return null
@@ -153,7 +154,7 @@ class GrabService : AccessibilityService() {
         )
     }
 
-    /** 探针限流：同一句话 5 秒内最多一条，防刷屏 */
+    /** 探针限流：同一句话 5 秒内最多一条 */
     private fun probe(msg: String) {
         val now = System.currentTimeMillis()
         if (now - lastProbeLog > 5000) {
