@@ -1,158 +1,66 @@
 package com.light.grab
 
 import android.accessibilityservice.AccessibilityService
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
-import android.content.Intent
-import android.graphics.Rect
-import android.os.Build
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import kotlin.random.Random
 
 class GrabService : AccessibilityService() {
 
     companion object {
-        @Volatile var instance: GrabService? = null
         @Volatile var logHook: ((String) -> Unit)? = null
-        private var lastClick = 0L
-        private var lastProbe = 0L
     }
+
+    private var lastBeat = 0L
+    private var lastClick = 0L
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        instance = this
-        foreground()
-        log("✅ 服务就绪（事件驱动）")
-    }
-
-    override fun onDestroy() {
-        instance = null
-        super.onDestroy()
+        log("✅ 服务启动")
     }
 
     override fun onInterrupt() {}
 
-    // ==================== 核心：纯事件驱动 ====================
-
     override fun onAccessibilityEvent(e: AccessibilityEvent?) {
         val pkg = e?.packageName?.toString() ?: return
-        if (!Config.isTarget(pkg)) return
+        if (pkg != "com.sfexpress.knight") return
 
-        // 探针：让你看见顺丰的事件在流动（5秒限流）
-        if (e.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            probe("👁 事件:窗口切换 [$pkg]")
-        }
-
-        if (e.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
-            e.eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) return
-
-        detect()
-    }
-
-    private fun detect() {
+        // 心跳：5秒限流，证明事件在流动
         val now = System.currentTimeMillis()
-        if (now - lastClick < 300) return
+        if (now - lastBeat > 5000) { lastBeat = now; log("👁 收到顺丰事件") }
 
-        val root = sfRoot() ?: run { probe("🙈 顺丰窗口不在前台"); return }
+        val root = rootInActiveWindow ?: return
+        if (root.packageName?.toString() != "com.sfexpress.knight") return
 
-        if (find(root, Config.dialogKeywords) == null) return
-        if (find(root, Config.btnKeywords) == null) return
+        val nodes = try {
+            root.findAccessibilityNodeInfosByText("确认抢单")
+        } catch (ex: Exception) { return }
 
-        val d = Random.nextLong(Config.delayMin.toLong(), Config.delayMax.toLong() + 1)
-        log("🔥 弹窗出现，${d}ms 后点击")
-        Thread { try { Thread.sleep(d) } catch (ex: Exception) {}; click() }.start()
+        for (n in nodes) {
+            if (n?.text != "确认抢单" || !n.isVisibleToUser) continue
+            if (System.currentTimeMillis() - lastClick < 1000) return
+            lastClick = System.currentTimeMillis()
+            log("🔥 发现按钮，点击")
+            val ok = clickIt(n)
+            log(if (ok) "✅ 已点击" else "⚠️ 点击失败")
+            return
+        }
     }
 
-    private fun click() {
-        val root = sfRoot() ?: return
-        for (kw in Config.btnKeywords) {
-            val nodes = try { root.findAccessibilityNodeInfosByText(kw) } catch (ex: Exception) { null } ?: continue
-            for (n in nodes) {
-                if (!visible(n)) continue
-                lastClick = System.currentTimeMillis()
-                tap(n)
-                log("✅ 已点击[$kw]")
-                return
+    private fun clickIt(n: AccessibilityNodeInfo): Boolean {
+        if (n.isClickable) {
+            return try { n.performAction(AccessibilityNodeInfo.ACTION_CLICK) } catch (ex: Exception) { false }
+        }
+        var p = n.parent
+        while (p != null) {
+            if (p.isClickable) {
+                return try { p.performAction(AccessibilityNodeInfo.ACTION_CLICK) } catch (ex: Exception) { false }
             }
+            p = p.parent
         }
-        probe("⚠️ 弹窗在但按钮没找到")
-    }
-
-    private fun tap(btn: AccessibilityNodeInfo) {
-        var t: AccessibilityNodeInfo? = if (btn.isClickable) btn else null
-        var p = btn.parent; var i = 0
-        while (t == null && p != null && i < 5) { if (p.isClickable) t = p; p = p.parent; i++ }
-        val ok = try { t?.performAction(AccessibilityNodeInfo.ACTION_CLICK) } catch (ex: Exception) { false } ?: false
-        if (!ok) {
-            val r = Rect(); btn.getBoundsInScreen(r)
-            if (r.width() > 0) {
-                val path = android.graphics.Path().apply {
-                    moveTo(r.centerX().toFloat(), r.centerY().toFloat())
-                    lineTo(r.centerX().toFloat(), r.centerY().toFloat())
-                }
-                dispatchGesture(android.accessibilityservice.GestureDescription.Builder()
-                    .addStroke(android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 50))
-                    .build(), null, null)
-            }
-        }
-    }
-
-    // ==================== 工具 ====================
-
-    private fun sfRoot(): AccessibilityNodeInfo? {
-        try { rootInActiveWindow?.let { if (Config.isTarget(it.packageName?.toString())) return it } } catch (ex: Exception) {}
-        try { windows?.forEach { w -> w.root?.let { r -> if (Config.isTarget(r.packageName?.toString())) return r } } } catch (ex: Exception) {}
-        return null
-    }
-
-    private fun find(root: AccessibilityNodeInfo, kws: List<String>): String? {
-        for (kw in kws) {
-            val ns = try { root.findAccessibilityNodeInfosByText(kw) } catch (ex: Exception) { null } ?: continue
-            for (n in ns) if (visible(n) && n.text == kw) return kw
-        }
-        return null
-    }
-
-    private fun visible(n: AccessibilityNodeInfo): Boolean = try {
-        if (!n.isVisibleToUser) false
-        else {
-            val r = Rect()
-            n.getBoundsInScreen(r)
-            r.width() > 0 && r.height() > 0
-        }
-    } catch (ex: Exception) { false }
-
-    private fun probe(msg: String) {
-        val now = System.currentTimeMillis()
-        if (now - lastProbe > 5000) { lastProbe = now; log(msg) }
+        return false
     }
 
     private fun log(msg: String) {
         try { logHook?.invoke(msg) } catch (ex: Exception) {}
-    }
-
-    // ==================== 常驻通知（简单一条） ====================
-
-    private fun foreground() {
-        try {
-            val mgr = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-            mgr.createNotificationChannel(NotificationChannel("g", "轻单助手", NotificationManager.IMPORTANCE_LOW))
-            val pi = PendingIntent.getActivity(this, 0,
-                Intent(this, Class.forName("com.light.grab.MainActivity")),
-                PendingIntent.FLAG_IMMUTABLE)
-            val n = Notification.Builder(this, "g")
-                .setContentTitle("轻单助手运行中")
-                .setContentText("事件驱动监控中")
-                .setSmallIcon(android.R.drawable.ic_popup_reminder)
-                .setOngoing(true)
-                .setContentIntent(pi)
-                .build()
-            if (Build.VERSION.SDK_INT >= 34)
-                startForeground(1, n, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-            else startForeground(1, n)
-        } catch (ex: Exception) {}
     }
 }
