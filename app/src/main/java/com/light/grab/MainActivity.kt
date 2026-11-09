@@ -9,8 +9,6 @@ import android.os.Bundle
 import android.provider.Settings
 import android.view.Menu
 import android.view.MenuItem
-import android.view.accessibility.AccessibilityManager
-import android.view.accessibility.AccessibilityServiceInfo
 import android.widget.Button
 import android.widget.ImageButton
 import android.widget.ScrollView
@@ -127,12 +125,12 @@ class MainActivity : AppCompatActivity() {
         tvStatus.text = "$line1\n今日命中 $today 单 · 最近 $lastStr\n累计命中 $total 单"
     }
 
+    // 权限判断：不依赖 AccessibilityServiceInfo，直接读系统设置
     private fun isAccOn(): Boolean {
-        val am = getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
-        val list = am.getEnabledAccessibilityServiceList(
-            AccessibilityServiceInfo.FEEDBACK_ALL_MASK
-        )
-        return list.any { it.resolveInfo.serviceInfo.packageName == packageName }
+        val enabled = Settings.Secure.getString(
+            contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        ) ?: return false
+        return enabled.contains(packageName)
     }
 
     private fun log(msg: String) {
