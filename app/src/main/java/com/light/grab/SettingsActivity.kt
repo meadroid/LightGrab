@@ -2,6 +2,8 @@ package com.light.grab
 
 import android.content.Intent
 import android.content.SharedPreferences
+import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import android.os.Bundle
 import android.provider.Settings
 import android.text.InputType
@@ -33,13 +35,13 @@ class SettingsActivity : AppCompatActivity() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(28), dp(20), dp(20))
-            setBackgroundColor(getColor(R.color.bgDark))
+            setBackgroundColor(Color.parseColor("#121A16")) // 深色底，和主体色调统一
         }
 
         val title = TextView(this).apply {
             text = "设置"
             textSize = 22f
-            setTextColor(getColor(R.color.mint))
+            setTextColor(Color.parseColor("#6FD6A8")) // 薄荷绿
             setPadding(0, 0, 0, dp(20))
         }
         root.addView(title)
@@ -111,16 +113,15 @@ class SettingsActivity : AppCompatActivity() {
         tvKeyword.text = "关键词\n$kw"
         tvSentryDelay.text = "哨兵延时\n${sp.getInt("sentry_delay", 500)} 毫秒"
         tvSniperDelay.text = "狙击延时\n${sp.getInt("sniper_delay", 0)} 毫秒"
-        tvSniperDelay.post { } // noop
     }
 
     private fun makeRow(root: LinearLayout, label: String): TextView {
         val tv = TextView(this).apply {
             textSize = 16f
-            setTextColor(getColor(R.color.grayText))
+            setTextColor(Color.parseColor("#B8C4BD"))
             setPadding(dp(16), dp(16), dp(16), dp(16))
-            background = getDrawable(android.R.drawable.dialog_halo_light)
-            setBackgroundColor(getColor(R.color.grayChip))
+            // 不再引用系统图标，直接用纯色圆角底
+            background = ColorDrawable(Color.parseColor("#1E2A24"))
         }
         val lp = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
