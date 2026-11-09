@@ -39,11 +39,11 @@ class MainActivity : Activity() {
         tvLog = findViewById(R.id.tvLog)
         tvLog.movementMethod = ScrollingMovementMethod()
 
-        // 恢复上次配置
-        pkg.setText(Config.targetPkg)
+        // 恢复上次配置（多包名完整回显）
+        pkg.setText(Config.targetPkgs.joinToString(","))
         dialogKw.setText(Config.dialogKeywords.joinToString(","))
         btnKw.setText(Config.btnKeywords.joinToString(","))
-        tvPkg.text = "目标：${Config.targetPkg}"
+        tvPkg.text = "目标：${Config.targetPkgs.joinToString(" , ")}"
 
         // 应用点选
         findViewById<Button>(R.id.btnPick).setOnClickListener { pickApp() }
@@ -90,11 +90,11 @@ class MainActivity : Activity() {
             tvStatus.setTextColor(0xFFC62828.toInt())
             findViewById<View>(R.id.statusCard).setBackgroundColor(0xFFFBE9E7.toInt())
         }
-        tvPkg.text = "目标：${Config.targetPkg}"
+        tvPkg.text = "目标：${Config.targetPkgs.joinToString(" , ")}"
     }
 
     private fun saveAndApply() {
-        val p = pkg.text.toString().trim().ifEmpty { Config.targetPkg }
+        val p = pkg.text.toString().trim().ifEmpty { Config.targetPkgs.joinToString(",") }
         val dText = dialogKw.text.toString().ifBlank { Config.dialogKeywords.joinToString(",") }
         val bText = btnKw.text.toString().ifBlank { Config.btnKeywords.joinToString(",") }
 
@@ -103,7 +103,7 @@ class MainActivity : Activity() {
         Config.setDialogKeywords(dText)
         Config.setBtnKeywords(bText)
 
-        log("设置已保存 → ${Config.targetPkg}")
+        log("设置已保存 → ${Config.targetPkgs.joinToString(" , ")}")
     }
 
     /** 列出已安装应用，点选即填包名 */
