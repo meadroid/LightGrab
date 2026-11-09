@@ -16,6 +16,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.random.Random
 
 class GrabService : AccessibilityService() {
 
@@ -23,14 +24,10 @@ class GrabService : AccessibilityService() {
         const val CHANNEL_ID = "lightgrab_fg"
         const val NOTI_ID = 1001
 
-        @Volatile
-        var currentMode: Int = MainActivity.MODE_SHADOW
-
-        @Volatile
-        var isRunning: Boolean = false
+        @Volatile var currentMode: Int = MainActivity.MODE_SHADOW
+        @Volatile var isRunning: Boolean = false
     }
 
-    // 惰性初始化：第一次访问时自动创建，永远不会有"未初始化就使用"的崩溃
     private val sp: SharedPreferences by lazy {
         getSharedPreferences("lightdot", Context.MODE_PRIVATE)
     }
@@ -48,48 +45,54 @@ class GrabService : AccessibilityService() {
         event ?: return
         val pkg = event.packageName?.toString() ?: return
 
-        // 目标应用过滤：读设置页选择，全部应用时不限制
-        val appIndex = sp.getInt("app_index", MainActivity.APPS.size) // 默认全部应用
+        // 目标应用过滤
+        val appIndex = sp.getInt("app_index", MainActivity.APPS.size)
         if (appIndex < MainActivity.APPS.size) {
             val target = MainActivity.APPS.values.toList()[appIndex]
             if (!pkg.contains(target)) return
         }
 
         when (currentMode) {
-            MainActivity.MODE_SHADOW -> log("[影子]发现窗口 pkg=$pkg")
-            MainActivity.MODE_SENTRY -> log("[哨兵]监听中 pkg=$pkg")
-            MainActivity.MODE_SNIPER -> if (isRunning) tryGrab(event)
-            MainActivity.MODE_SILENT -> log("[静默]事件 pkg=$pkg")
+            MainActivity.MODE_SHADOW -> tryGrab(event, realClick = false)  // 测试线路：不真点
+            MainActivity.MODE_SENTRY   -> tryGrab(event, realClick = true) // 哨兵抢单
+            MainActivity.MODE_SNIPER   -> if (isRunning) tryGrab(event, realClick = true) // 狙击抢单
+            MainActivity.MODE_SILENT   -> { /* 静默：休眠，什么都不做 */ }
         }
     }
 
-    private fun tryGrab(event: AccessibilityEvent) {
-        // 关键词：设置页自定义，没填就用默认列表
+    private fun tryGrab(event: AccessibilityEvent, realClick: Boolean) {
         val custom = sp.getString("keyword", "")?.trim() ?: ""
         val keywords = if (custom.isNotEmpty()) listOf(custom)
         else listOf("抢单", "接单", "立即抢")
 
-        // 点击前延时：来自设置页「狙击延时」，不焊死
-        val delayBefore = sp.getInt("sniper_delay", 0).toLong()
+        // 哨兵用自己的延时区间，狙击用自己的
+        val (minD, maxD) = if (currentMode == MainActivity.MODE_SENTRY)
+            Pair(sp.getInt("sentry_delay_min", 300), sp.getInt("sentry_delay_max", 800))
+        else
+            Pair(sp.getInt("sniper_delay_min", 0), sp.getInt("sniper_delay_max", 200))
 
         val node: AccessibilityNodeInfo = rootInActiveWindow ?: return
         for (kw in keywords) {
             val targets = node.findAccessibilityNodeInfosByText(kw)
             if (targets != null && targets.isNotEmpty()) {
                 val now = System.currentTimeMillis()
-                if (now - lastFire < 300) return // 最小间隔保护，防连点
+                if (now - lastFire < 300) return
                 lastFire = now
 
-                log("[狙击]命中「$kw」，延时${delayBefore}ms后点击")
-                if (delayBefore > 0) {
+                val delay = Random.nextLong(minD, maxD + 1)  // 区间内随机
+                val tag = MainActivity.MODE_NAMES[currentMode]
+                if (!realClick) {
+                    log("[影子·测试]命中「$kw」延时${delay}ms（不点击）")
                     node.recycle()
-                    handler.postDelayed({ clickTarget(kw) }, delayBefore)
                     return
                 }
-                clickTarget(kw)
+                log("[$tag]命中「$kw」，延时${delay}ms后点击")
+                node.recycle()
+                handler.postDelayed({ clickTarget(kw) }, delay)
                 return
             }
         }
+        node.recycle()
     }
 
     private fun clickTarget(keyword: String) {
@@ -105,7 +108,6 @@ class GrabService : AccessibilityService() {
         node.recycle()
     }
 
-    /** 战绩：今日 + 永久累计（SharedPreferences 持久化，重启后数值一直累加不清零） */
     private fun recordHit() {
         val day = SimpleDateFormat("yyyyMMdd", Locale.CHINA).format(Date())
         sp.edit()
