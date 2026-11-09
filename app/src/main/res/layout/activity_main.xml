@@ -78,10 +78,11 @@
             android:layout_height="wrap_content"
             android:layout_gravity="top|end"
             android:padding="6dp"
-            android:text="✎"
+            android:text="📋"
             android:textSize="12sp"
             android:textColor="@color/grayText"
             android:contentDescription="@string/btn_copy_log" />
+
     </FrameLayout>
 
 </LinearLayout>
