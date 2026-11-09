@@ -42,10 +42,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnMain: Button
     private val logBuf = StringBuilder()
     private var running = false
+    private var lastSvcLogPos = 0  // 已读到的服务日志位置
 
     private val refresh = object : Runnable {
         override fun run() {
             refreshStatus()
+            syncServiceLogs()
             tvStatus.postDelayed(this, 1000)
         }
     }
@@ -122,6 +124,22 @@ class MainActivity : AppCompatActivity() {
         val line2 = "🕐 今日：命中 $today 发  $lastStr"
         val line3 = "🏆 累计：命中 $total 发"
         tvStatus.text = "$line1\n$line2\n$line3"
+    }
+
+    /** 把服务写进 SP 的日志同步到界面日志区 */
+    private fun syncServiceLogs() {
+        val svcLogs = sp.getString("svc_logs", "") ?: ""
+        if (svcLogs.length <= lastSvcLogPos) return
+        val fresh = svcLogs.substring(lastSvcLogPos).trimStart('\n')
+        lastSvcLogPos = svcLogs.length
+        if (fresh.isNotEmpty()) {
+            runOnUiThread {
+                logBuf.insert(0, "$fresh\n")
+                if (logBuf.length > 8000) logBuf.setLength(8000)
+                tvLog.text = logBuf.toString()
+                logScroll.scrollTo(0, 0)
+            }
+        }
     }
 
     private fun isAccOn(): Boolean {
