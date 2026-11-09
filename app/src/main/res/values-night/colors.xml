@@ -1,11 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="green_on">#5BD6A9</color>
-    <color name="red_off">#E07A6E</color>
-    <color name="bg_on">#24352D</color>
-    <color name="bg_off">#24352D</color>
-    <color name="log_bg">#1C221E</color>
-    <color name="log_text">#C4D6CC</color>
-    <color name="text_hint">#6E8578</color>
-    <color name="text_link">#5BD6A9</color>
-    <color name="page_bg">#161B18</color>
+    <color name="mintBg">#1E2B26</color>
+    <color name="grayChip">#2A2A2A</color>
+    <color name="grayText">#AAAAAA</color>
+    <color name="ink">#DDDDDD</color>
 </resources>
