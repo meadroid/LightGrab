@@ -7,22 +7,26 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.os.Bundle
 import android.provider.Settings
+import android.text.InputType
 import android.view.Menu
 import android.view.MenuItem
 import android.widget.Button
+import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 
 class MainActivity : AppCompatActivity() {
 
     companion object {
-        const val MODE_SHADOW = 0    // 影子：只看不点
-        const val MODE_SENTRY = 1    // 哨兵：发现弹窗
-        const val MODE_SNIPER = 2    // 狙击：自动点击抢单
-        const val MODE_SILENT = 3    // 静默：仅记录
+        const val MODE_SHADOW = 0
+        const val MODE_SENTRY = 1
+        const val MODE_SNIPER = 2
+        const val MODE_SILENT = 3
 
         val MODE_NAMES = listOf("影子", "哨兵", "狙击", "静默")
         val CHIP_IDS = listOf(
@@ -73,7 +77,6 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 日志区右上角小图标（⎘）：点击复制日志
         findViewById<TextView>(R.id.btnCopyLog).setOnClickListener {
             val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             cm.setPrimaryClip(ClipData.newPlainText("log", tvLog.text))
@@ -104,18 +107,20 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshStatus() {
         val modeName = MODE_NAMES[GrabService.currentMode]
+        val day = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.CHINA)
+            .format(java.util.Date())
+        val today = sp.getInt("hit_$day", 0)
+        val total = sp.getInt("total_hit", 0)
         val last = sp.getLong("last_hit_time", 0L)
         val lastStr = if (last > 0)
-            java.text.SimpleDateFormat("MM-dd HH:mm:ss", java.util.Locale.CHINA)
+            java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.CHINA)
                 .format(java.util.Date(last))
         else "无"
-        val total = sp.getInt("total_hit", 0)
 
-        // 三行统一 emoji 前缀，等宽字体下自然对齐
-        val line1 = if (running && isAccOn()) "🟢 模式：${modeName} 运行中"
-                     else "⚪ 模式：${modeName} 待启动"
-        val line2 = "🕐 最后命中：$lastStr"
-        val line3 = "🏆 累计：共命中 $total 发"
+        val line1 = if (running && isAccOn()) "♟️ 模式：${modeName} 运行中"
+                     else "♟️ 模式：${modeName} 待启动"
+        val line2 = "🕐 今日：命中 $today 发 · 末发 $lastStr"
+        val line3 = "🏆 累计：$total 发"
         tvStatus.text = "$line1\n$line2\n$line3"
     }
 
@@ -135,7 +140,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ===== 武器库菜单：二级直连各自设置 =====
+    // ===== 武器库菜单 =====
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.menu_main, menu)
         return true
@@ -143,10 +148,10 @@ class MainActivity : AppCompatActivity() {
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return when (item.itemId) {
-            R.id.action_target -> openSettings("app")
-            R.id.action_keyword -> openSettings("keyword")
-            R.id.action_sentry_delay -> openSettings("sentry")
-            R.id.action_sniper_delay -> openSettings("sniper")
+            R.id.action_target -> { askApp(); true }
+            R.id.action_keyword -> { askKeyword(); true }
+            R.id.action_sentry_delay -> { askDelay("哨兵延时（最低~最高）", "sentry_delay_min", "sentry_delay_max"); true }
+            R.id.action_sniper_delay -> { askDelay("狙击延时（最低~最高）", "sniper_delay_min", "sniper_delay_max"); true }
             R.id.action_permission -> {
                 startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); true
             }
@@ -154,11 +159,91 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun openSettings(which: String): Boolean {
-        startActivity(
-            Intent(this, SettingsActivity::class.java).putExtra("open", which)
-        )
-        return true
+    /** 弹窗关闭后重新打开菜单，停留在武器库列表 */
+    private fun reopenMenu() {
+        runOnUiThread { openOptionsMenu() }
+    }
+
+    /** 三级：选择目标应用 */
+    private fun askApp() {
+        val pm = packageManager
+        val apps = pm.getInstalledPackages(0)
+            .filter { pm.getLaunchIntentForPackage(it.packageName) != null }
+            .map {
+                val name = it.applicationInfo?.loadLabel(pm)?.toString() ?: it.packageName
+                name to it.packageName
+            }
+            .sortedBy { it.first }
+
+        val names = apps.map { it.first }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("选择目标应用")
+            .setItems(names) { _, which ->
+                sp.edit()
+                    .putString("app_pkg", apps[which].second)
+                    .putString("app_name", apps[which].first)
+                    .apply()
+                Toast.makeText(this, "已选择 ${apps[which].first}", Toast.LENGTH_SHORT).show()
+                reopenMenu()
+            }
+            .setNegativeButton("取消") { _, _ -> reopenMenu() }
+            .setOnCancelListener { reopenMenu() }
+            .show()
+    }
+
+    /** 三级：关键词 */
+    private fun askKeyword() {
+        val input = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_TEXT
+            setText(sp.getString("keyword", ""))
+            setSingleLine(true)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("关键词（点中按钮上的文字）")
+            .setView(input)
+            .setPositiveButton("保存") { _, _ ->
+                sp.edit().putString("keyword", input.text.toString().trim()).apply()
+                Toast.makeText(this, "已保存", Toast.LENGTH_SHORT).show()
+                reopenMenu()
+            }
+            .setNegativeButton("取消") { _, _ -> reopenMenu() }
+            .setOnCancelListener { reopenMenu() }
+            .show()
+    }
+
+    /** 三级：延时区间 */
+    private fun askDelay(title: String, keyMin: String, keyMax: String) {
+        val minInput = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER
+            hint = "最低值（毫秒）"
+            setText(sp.getInt(keyMin, 0).toString())
+        }
+        val maxInput = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER
+            hint = "最高值（毫秒）"
+            setText(sp.getInt(keyMax, 500).toString())
+        }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            val pad = (24 * resources.displayMetrics.density).toInt()
+            setPadding(pad, (10 * resources.displayMetrics.density).toInt(), pad, 0)
+            addView(minInput)
+            addView(maxInput)
+        }
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setView(box)
+            .setPositiveButton("保存") { _, _ ->
+                val min = minInput.text.toString().toIntOrNull()?.coerceIn(0, 10000) ?: 0
+                var max = maxInput.text.toString().toIntOrNull()?.coerceIn(0, 10000) ?: 500
+                if (max < min) max = min
+                sp.edit().putInt(keyMin, min).putInt(keyMax, max).apply()
+                Toast.makeText(this, "已保存 ${min}~${max}ms", Toast.LENGTH_SHORT).show()
+                reopenMenu()
+            }
+            .setNegativeButton("取消") { _, _ -> reopenMenu() }
+            .setOnCancelListener { reopenMenu() }
+            .show()
     }
 }
 
