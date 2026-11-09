@@ -145,7 +145,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
-        menuInflater.inflate(R.menu.main_menu, menu) // ← 改成你菜单文件的实际名
+        menuInflater.inflate(R.menu.menu_main, menu)
         return true
     }
 
