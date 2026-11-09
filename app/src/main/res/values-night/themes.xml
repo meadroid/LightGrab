@@ -1,7 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 深色模式主题：柔和深灰绿，不纯黑不刺眼 -->
     <style name="Theme.LightGrab" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">@color/page_bg</item>
-        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:colorPrimary">@color/mint</item>
+        <item name="android:colorAccent">@color/mint</item>
+        <item name="android:colorForeground">@color/ink</item>
+        <item name="android:windowBackground">@android:color/background_dark</item>
+    </style>
+
+    <style name="Chip">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_height">32dp</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:layout_marginEnd">6dp</item>
+        <item name="android:gravity">center</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:background">@color/grayChip</item>
+        <item name="android:textColor">@color/grayText</item>
     </style>
 </resources>
