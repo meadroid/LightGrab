@@ -1,11 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="green_on">#3EBD93</color>
-    <color name="red_off">#E07A6E</color>
-    <color name="bg_on">#DFF5EC</color>
-    <color name="bg_off">#DFF5EC</color>
-    <color name="log_bg">#F0F7F3</color>
-    <color name="log_text">#3A4A42</color>
-    <color name="text_hint">#8FA69B</color>
-    <color name="text_link">#2E9B72</color>
-    <color name="page_bg">#FAFDFB</color>
+    <color name="mint">#2E9E7B</color>
+    <color name="mintDark">#1F7A5E</color>
+    <color name="mintBg">#EAF5F0</color>
+    <color name="mintTextOn">#FFFFFF</color>
+    <color name="grayChip">#F0F0F0</color>
+    <color name="grayText">#666666</color>
+    <color name="ink">#333333</color>
 </resources>
