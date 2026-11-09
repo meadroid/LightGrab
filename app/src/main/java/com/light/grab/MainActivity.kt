@@ -119,12 +119,12 @@ class MainActivity : AppCompatActivity() {
             java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.CHINA).format(java.util.Date(last))
         else "无"
 
-        val line1 = when {
-            running && isAccOn() -> "● ${modeName}模式运行中"
-            else -> "○ ${modeName}模式待启动"
-        }
-        // 第2、3行前缀都是4个字，对齐
-        tvStatus.text = "$line1\n今日战果：命中 $today 发 · 最后一发 $lastStr\n累计战果：共命中 $total 发"
+        // 三行：图标 + 全角冒号，等宽字体下自动对齐
+        val line1 = if (running && isAccOn()) "◉ 模式：${modeName}运行中"
+                     else "○ 模式：${modeName}待启动"
+        val line2 = "📅 今日：命中 $today 发 · 末发 $lastStr"
+        val line3 = "🏆 累计：共命中 $total 发"
+        tvStatus.text = "$line1\n$line2\n$line3"
     }
 
     private fun isAccOn(): Boolean {
@@ -143,6 +143,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ===== 武器库菜单 =====
     override fun onCreateOptionsMenu(menu: Menu): Boolean {
         menuInflater.inflate(R.menu.menu_main, menu)
         return true
@@ -150,14 +151,20 @@ class MainActivity : AppCompatActivity() {
 
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return when (item.itemId) {
-            R.id.action_open_acc -> {
-                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); true
-            }
-            R.id.action_settings -> {
+            R.id.action_target -> {                       // 狙击目标
                 startActivity(Intent(this, SettingsActivity::class.java)); true
             }
-            R.id.action_clear_log -> {
-                logBuf.clear(); tvLog.text = ""; true
+            R.id.action_keyword -> {                      // 关键词
+                startActivity(Intent(this, SettingsActivity::class.java)); true
+            }
+            R.id.action_sentry_delay -> {                 // 哨兵延时
+                startActivity(Intent(this, SettingsActivity::class.java)); true
+            }
+            R.id.action_sniper_delay -> {                 // 狙击延时
+                startActivity(Intent(this, SettingsActivity::class.java)); true
+            }
+            R.id.action_permission -> {                   // 开启权限
+                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); true
             }
             else -> super.onOptionsItemSelected(item)
         }
