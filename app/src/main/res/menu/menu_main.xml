@@ -13,6 +13,16 @@
         app:showAsAction="never" />
 
     <item
+        android:id="@+id/action_noti_keyword"
+        android:title="通知关键词"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_ringtone"
+        android:title="铃声"
+        app:showAsAction="never" />
+
+    <item
         android:id="@+id/action_sentry_delay"
         android:title="哨兵延时"
         app:showAsAction="never" />
