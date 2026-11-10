@@ -52,7 +52,7 @@
         android:layout_marginTop="14dp"
         android:backgroundTint="@color/mint"
         android:textColor="@color/mintTextOn"
-        android:textSize="12sp"
+        android:textSize="13sp"
         android:text="开启监听" />
 
     <!-- 状态三行：15sp加大、行距放宽 -->
