@@ -5,7 +5,7 @@
     android:orientation="vertical"
     android:padding="16dp">
 
-    <!-- 标题行：左标题 + 右齿轮（替代原ActionBar） -->
+    <!-- 标题行：左标题 + 右齿轮 -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -31,7 +31,7 @@
             android:contentDescription="@string/arsenal" />
     </LinearLayout>
 
-    <!-- 模式胶囊行 -->
+    <!-- 模式胶囊行：4个胶囊，间距均匀 -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -41,21 +41,23 @@
         <TextView style="@style/Chip" android:id="@+id/chipShadow" android:text="🕵️ 影子" />
         <TextView style="@style/Chip" android:id="@+id/chipSentry" android:text="🪖 哨兵" />
         <TextView style="@style/Chip" android:id="@+id/chipSniper" android:text="🎯 狙击" />
-        <TextView style="@style/Chip" android:id="@+id/chipSilent" android:text="🌙 静默" />
+        <TextView style="@style/Chip" android:id="@+id/chipSilent" android:text="🌙 静默"
+            android:layout_marginEnd="0dp" />
     </LinearLayout>
 
-    <!-- 监听按钮：40dp瘦身，绿/灰随状态 -->
+    <!-- 监听按钮：和胶囊同高32dp、同字号13sp，视觉统一 -->
     <Button
         android:id="@+id/btnMain"
         android:layout_width="match_parent"
-        android:layout_height="40dp"
+        android:layout_height="32dp"
+        android:minHeight="0dp"
         android:layout_marginTop="14dp"
         android:backgroundTint="@color/mint"
         android:textColor="@color/mintTextOn"
         android:textSize="13sp"
         android:text="开启监听" />
 
-    <!-- 状态三行：15sp加大、行距放宽 -->
+    <!-- 状态三行 -->
     <TextView
         android:id="@+id/tvStatus"
         android:layout_width="match_parent"
@@ -77,13 +79,15 @@
             android:id="@+id/logScroll"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            android:background="@color/mintBg"
-            android:padding="10dp">
+            android:background="@color/mintBg">
 
             <TextView
                 android:id="@+id/tvLog"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:paddingTop="10dp"
+                android:paddingBottom="10dp"
+                android:paddingEnd="10dp"
                 android:textSize="12sp"
                 android:textColor="@color/grayText"
                 android:fontFamily="monospace"
