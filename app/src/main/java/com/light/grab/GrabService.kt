@@ -115,19 +115,25 @@ class GrabService : AccessibilityService() {
         scheduleWatchTick(ticksLeft - 1, 200)
     }
 
-    /** 哨兵提示音：用 ToneGenerator 直接发声，不依赖系统铃声设置，改铃声也不影响 */
+    /** 哨兵提示音：叮咚一声·闹钟通道·音量顶格 */
     private fun playAlert() {
-        try {
-            val tg = android.media.ToneGenerator(android.media.AudioManager.STREAM_NOTIFICATION, 80)
-            tg.startTone(android.media.ToneGenerator.TONE_PROP_BEEP2, 300)
-            handler.postDelayed({ tg.release() }, 600)
-        } catch (e: Exception) {
+        Thread {
+            var tg: android.media.ToneGenerator? = null
             try {
-                val uri = android.provider.Settings.System.DEFAULT_NOTIFICATION_URI
-                val r = android.media.RingtoneManager.getRingtone(this, uri)
-                r.play()
-            } catch (_: Exception) {}
-        }
+                tg = android.media.ToneGenerator(
+                    android.media.AudioManager.STREAM_ALARM, 100)
+                tg.startTone(android.media.ToneGenerator.TONE_CDMA_CONFIRM, 500)
+                Thread.sleep(600)
+            } catch (e: Exception) {
+                try {
+                    val uri = android.provider.Settings.System.DEFAULT_NOTIFICATION_URI
+                    val r = android.media.RingtoneManager.getRingtone(this, uri)
+                    r.play()
+                } catch (_: Exception) {}
+            } finally {
+                try { tg?.release() } catch (_: Exception) {}
+            }
+        }.start()
     }
 
     /**
