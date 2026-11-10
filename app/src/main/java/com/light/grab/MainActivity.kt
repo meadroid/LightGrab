@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.res.ColorStateList
 import android.os.Bundle
 import android.provider.Settings
 import android.text.InputType
@@ -66,6 +67,11 @@ class MainActivity : AppCompatActivity() {
             findViewById<TextView>(id).setOnClickListener { setMode(index) }
         }
 
+        // 齿轮：打开武器库菜单（原ActionBar三个点的功能）
+        findViewById<TextView>(R.id.btnArsenal).setOnClickListener {
+            openOptionsMenu()
+        }
+
         btnMain.setOnClickListener {
             if (!isAccOn()) {
                 Toast.makeText(this, "请先开启无障碍权限", Toast.LENGTH_LONG).show()
@@ -73,8 +79,8 @@ class MainActivity : AppCompatActivity() {
             } else {
                 running = !running
                 GrabService.isRunning = running
-                btnMain.text = if (running) "停止监听" else "开启监听"
                 log(if (running) "开启监听 · ${MODE_NAMES[GrabService.currentMode]}模式" else "已停止监听")
+                updateMainBtn()
                 refreshStatus()
             }
         }
@@ -85,9 +91,23 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "日志已复制", Toast.LENGTH_SHORT).show()
         }
 
+        // 开机同步真实运行状态（服务还开着时按钮直接显示"停止监听"+绿色）
+        running = GrabService.isRunning
+        updateMainBtn()
+
         setMode(sp.getInt("mode", MODE_SHADOW))
         log("轻点已启动")
         tvStatus.post(refresh)
+    }
+
+    /** 监听按钮：运行=绿，停止=灰，文字跟随状态 */
+    private fun updateMainBtn() {
+        btnMain.text = if (running) "停止监听" else "开启监听"
+        val bg = if (running) R.color.mint else R.color.grayChip
+        val fg = if (running) R.color.mintTextOn else R.color.grayText
+        btnMain.backgroundTintList = ColorStateList.valueOf(
+            ContextCompat.getColor(this, bg))
+        btnMain.setTextColor(ContextCompat.getColor(this, fg))
     }
 
     private fun setMode(mode: Int) {
