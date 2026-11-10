@@ -14,6 +14,7 @@ import android.view.MenuItem
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.PopupMenu
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -41,6 +42,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvStatus: TextView
     private lateinit var logScroll: ScrollView
     private lateinit var btnMain: Button
+    private lateinit var btnArsenal: TextView
     private val logBuf = StringBuilder()
     private var running = false
     private var lastSvcLogPos = 0  // 已读到的服务日志位置
@@ -62,15 +64,14 @@ class MainActivity : AppCompatActivity() {
         tvStatus = findViewById(R.id.tvStatus)
         logScroll = findViewById(R.id.logScroll)
         btnMain = findViewById(R.id.btnMain)
+        btnArsenal = findViewById(R.id.btnArsenal)
 
         CHIP_IDS.forEachIndexed { index, id ->
             findViewById<TextView>(id).setOnClickListener { setMode(index) }
         }
 
-        // 齿轮：打开武器库菜单（原ActionBar三个点的功能）
-        findViewById<TextView>(R.id.btnArsenal).setOnClickListener {
-            openOptionsMenu()
-        }
+        // 齿轮：从齿轮位置弹出武器库菜单（PopupMenu，不依赖ActionBar）
+        btnArsenal.setOnClickListener { showArsenalMenu() }
 
         btnMain.setOnClickListener {
             if (!isAccOn()) {
@@ -91,13 +92,21 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "日志已复制", Toast.LENGTH_SHORT).show()
         }
 
-        // 开机同步真实运行状态（服务还开着时按钮直接显示"停止监听"+绿色）
+        // 开机同步真实运行状态
         running = GrabService.isRunning
         updateMainBtn()
 
         setMode(sp.getInt("mode", MODE_SHADOW))
         log("轻点已启动")
         tvStatus.post(refresh)
+    }
+
+    /** 从齿轮位置弹出武器库菜单 */
+    private fun showArsenalMenu() {
+        val popup = PopupMenu(this, btnArsenal)
+        popup.menuInflater.inflate(R.menu.menu_main, popup.menu)
+        popup.setOnMenuItemClickListener { item -> onOptionsItemSelected(item) }
+        popup.show()
     }
 
     /** 监听按钮：运行=绿，停止=灰，文字跟随状态 */
@@ -178,12 +187,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // ===== 武器库菜单 =====
-    override fun onCreateOptionsMenu(menu: Menu): Boolean {
-        menuInflater.inflate(R.menu.menu_main, menu)
-        return true
-    }
-
+    // 保留：PopupMenu 的菜单点击仍走这里处理
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return when (item.itemId) {
             R.id.action_target -> { askApp(); true }
@@ -197,9 +201,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 弹窗关闭后重新打开菜单，停留在武器库列表 */
+    /** 弹窗关闭后重新打开武器库菜单，停留在列表 */
     private fun reopenMenu() {
-        runOnUiThread { openOptionsMenu() }
+        runOnUiThread { showArsenalMenu() }
     }
 
     /** 三级：选择目标应用 */
