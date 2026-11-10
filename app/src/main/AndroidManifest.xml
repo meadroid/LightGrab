@@ -42,5 +42,15 @@
                 android:resource="@xml/service_config" />
         </service>
 
+        <!-- 通知哨兵：监听通知栏，目标App来新单就触发 -->
+        <service
+            android:name=".NotificationWatcher"
+            android:exported="false"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
     </application>
 </manifest>
