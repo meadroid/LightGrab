@@ -44,6 +44,7 @@ class GrabService : AccessibilityService() {
         instance = this
         startFg()
         log("[服务] 已连接，模式=${MainActivity.MODE_NAMES[currentMode]}")
+        handler.postDelayed({ updateFgText() }, 500)  // 等前台挂稳再刷新通知文字
     }
 
     override fun onDestroy() {
@@ -90,15 +91,17 @@ class GrabService : AccessibilityService() {
         handler.postDelayed({ watchConfirm(watchSec * 1000 / 200) }, 200)
     }
 
-    /** 播放系统默认通知音（不震、不弹窗，响约0.8秒） */
+    /** 播放用户自选铃声，没选就用系统默认通知音（约0.8秒） */
     private fun playAlert() {
         try {
-            val uri = android.provider.Settings.System.DEFAULT_NOTIFICATION_URI
+            val custom = sp.getString("alert_uri", null)
+            val uri = if (custom != null) android.net.Uri.parse(custom)
+                      else android.provider.Settings.System.DEFAULT_NOTIFICATION_URI
             val r = android.media.RingtoneManager.getRingtone(this, uri)
             r.play()
             handler.postDelayed({ r.stop() }, 800)
         } catch (e: Exception) {
-            // 个别机型取不到默认音，忽略，日志照常
+            // 取不到铃声就静默，日志照常
         }
     }
 
@@ -217,18 +220,21 @@ class GrabService : AccessibilityService() {
 
     private fun startFg() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "轻点前台服务", NotificationManager.IMPORTANCE_LOW)
         )
+        updateFgText()   // 首次进入前台
+    }
 
+    /** 前台通知文字跟随模式刷新 */
+    private fun updateFgText() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val nm = getSystemService(NotificationManager::class.java)
         val pi = PendingIntent.getActivity(
-            this, 0,
-            Intent(this, MainActivity::class.java),
+            this, 0, Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE
         )
-
         val n: Notification = Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("轻点运行中")
             .setContentText("模式=${MainActivity.MODE_NAMES[currentMode]}")
@@ -236,8 +242,7 @@ class GrabService : AccessibilityService() {
             .setContentIntent(pi)
             .setOngoing(true)
             .build()
-
-        startForeground(NOTI_ID, n)
+        nm.notify(NOTI_ID, n)
     }
 
     override fun onInterrupt() {
