@@ -191,6 +191,8 @@ class MainActivity : AppCompatActivity() {
         return when (item.itemId) {
             R.id.action_target -> { askApp(); true }
             R.id.action_keyword -> { askKeyword(); true }
+            R.id.action_noti_keyword -> { askNotiKeyword(); true }
+            R.id.action_ringtone -> { pickRingtone(); true }
             R.id.action_sentry_delay -> { askDelay("哨兵延时（最低~最高）", "sentry_delay_min", "sentry_delay_max"); true }
             R.id.action_sniper_delay -> { askDelay("狙击延时（最低~最高）", "sniper_delay_min", "sniper_delay_max"); true }
             R.id.action_permission -> {
@@ -200,7 +202,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 三级：选择目标应用（弹窗关闭即关闭，不再自动弹菜单） */
+    /** 三级：选择目标应用 */
     private fun askApp() {
         val pm = packageManager
         val apps = pm.getInstalledPackages(0)
@@ -241,6 +243,54 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton("取消", null)
             .show()
+    }
+
+    /** 三级：通知关键词（哨兵过滤通知内容，和狙击关键词分开） */
+    private fun askNotiKeyword() {
+        val input = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_TEXT
+            setText(sp.getString("noti_keyword", ""))
+            setSingleLine(true)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("通知关键词（新单通知里必须出现的字，如：新单）")
+            .setView(input)
+            .setPositiveButton("保存") { _, _ ->
+                sp.edit().putString("noti_keyword", input.text.toString().trim()).apply()
+                Toast.makeText(this, "已保存，留空=目标App任何新通知都触发", Toast.LENGTH_LONG).show()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    /** 三级：弹系统选铃声窗口，选完存URI */
+    private fun pickRingtone() {
+        val intent = Intent(android.media.RingtoneManager.ACTION_RINGTONE_PICKER).apply {
+            putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_TYPE,
+                     android.media.RingtoneManager.TYPE_NOTIFICATION)
+            putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_TITLE, "选哨兵铃声")
+            putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
+            // 回显当前选中的
+            sp.getString("alert_uri", null)?.let {
+                putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_EXISTING_URI,
+                         android.net.Uri.parse(it))
+            }
+        }
+        @Suppress("DEPRECATION")
+        startActivityForResult(intent, 777)
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 777 && resultCode == RESULT_OK) {
+            val uri = data?.getParcelableExtra<android.net.Uri>(
+                android.media.RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
+            if (uri != null) {
+                sp.edit().putString("alert_uri", uri.toString()).apply()
+                Toast.makeText(this, "铃声已保存", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     /** 三级：延时区间 */
