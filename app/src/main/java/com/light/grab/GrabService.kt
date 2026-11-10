@@ -26,7 +26,6 @@ class GrabService : AccessibilityService() {
     companion object {
         const val CHANNEL_ID = "lightgrab_fg"
         const val NOTI_ID = 1001
-
         @Volatile var currentMode: Int = MainActivity.MODE_SHADOW
         @Volatile var isRunning: Boolean = false
         @Volatile var instance: GrabService? = null
@@ -35,16 +34,17 @@ class GrabService : AccessibilityService() {
     private val sp: SharedPreferences by lazy {
         getSharedPreferences("lightdot", Context.MODE_PRIVATE)
     }
-
     private var lastFire = 0L
     private val handler = Handler(Looper.getMainLooper())
+
+    // ★ 哨兵待命任务句柄：保证全服务同一时刻最多一条待命链
+    private var watchTask: Runnable? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
         startFg()
         log("[服务] 已连接，模式=${MainActivity.MODE_NAMES[currentMode]}")
-        handler.postDelayed({ updateFgText() }, 500)  // 等前台挂稳再刷新通知文字
     }
 
     override fun onDestroy() {
@@ -54,99 +54,129 @@ class GrabService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
-
-        // 只处理窗口切换和内容变化，避免无效全页搜索
         val t = event.eventType
         if (t != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
             t != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED &&
             t != AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
         ) return
-
         val pkg = event.packageName?.toString() ?: return
-        if (pkg == packageName) return  // 忽略自己界面的变化，防止死循环
-
-        // 目标应用过滤（未选择时不过滤）
+        if (pkg == packageName) return
         val targetPkg = sp.getString("app_pkg", null)
         if (targetPkg != null && pkg != targetPkg) return
-
         when (currentMode) {
-            MainActivity.MODE_SHADOW -> tryGrab(realClick = false)  // 测试线路：不真点
-            MainActivity.MODE_SENTRY -> { /* 哨兵由通知驱动，不走窗口事件 */ }
+            MainActivity.MODE_SHADOW -> tryGrab(realClick = false)
+            MainActivity.MODE_SENTRY -> { /* 哨兵只由通知驱动，窗口事件不参与 */ }
             MainActivity.MODE_SNIPER -> if (isRunning) tryGrab(realClick = true)
             MainActivity.MODE_SILENT -> { /* 静默：休眠 */ }
         }
     }
 
-    // ============ 哨兵：通知来了 → 响铃 → 待命 → 只点二级「确认抢单」 ============
+    // ============ 哨兵：通知来了 → 响铃 → 待命 → 只点可见的真二级弹窗 ============
 
     /** 通知监听器命中后调用：响铃提示 + 进入待命窗口 */
     fun onNotiFired() {
         if (!isRunning) return
-        if (currentMode != MainActivity.MODE_SENTRY) return  // 只服务哨兵
+        if (currentMode != MainActivity.MODE_SENTRY) return
+
+        // ★ 新通知到来：先掐掉上一条还没走完的待命链，再开新链
+        cancelWatch()
 
         playAlert()
         val watchSec = sp.getInt("sentry_watch_sec", 15)
         log("[哨兵] 通知触发，进入待命${watchSec}秒，等待你点「抢单」")
-
-        handler.postDelayed({ watchConfirm(watchSec * 1000 / 200) }, 200)
+        val ticks = watchSec * 1000 / 200
+        scheduleWatchTick(ticks, 200)
     }
 
-    /** 播放用户自选铃声，没选就用系统默认通知音（约0.8秒） */
+    /** 用同一个 Runnable 句柄串起待命循环，随时可整体掐断 */
+    private fun scheduleWatchTick(ticksLeft: Int, delayMs: Long) {
+        val task = Runnable {
+            watchTask = null
+            watchConfirm(ticksLeft)
+        }
+        watchTask = task
+        handler.postDelayed(task, delayMs)
+    }
+
+    private fun cancelWatch() {
+        watchTask?.let { handler.removeCallbacks(it) }
+        watchTask = null
+    }
+
+    /** 待命循环：每200ms扫一次「确认抢单」，扫满待命时长就彻底收工 */
+    private fun watchConfirm(ticksLeft: Int) {
+        // 双保险：停止/切模式时立即终止，绝不再扫
+        if (!isRunning || currentMode != MainActivity.MODE_SENTRY) return
+        if (ticksLeft <= 0) {
+            log("[哨兵] 待命结束，未等到确认弹窗，继续蹲守")
+            return
+        }
+        if (tryClickConfirm()) return  // 点到真弹窗，本轮结束
+        scheduleWatchTick(ticksLeft - 1, 200)
+    }
+
+    /** 播放系统默认通知音（不震、不弹窗，响约0.8秒） */
     private fun playAlert() {
         try {
-            val custom = sp.getString("alert_uri", null)
-            val uri = if (custom != null) android.net.Uri.parse(custom)
-                      else android.provider.Settings.System.DEFAULT_NOTIFICATION_URI
+            val uri = android.provider.Settings.System.DEFAULT_NOTIFICATION_URI
             val r = android.media.RingtoneManager.getRingtone(this, uri)
             r.play()
             handler.postDelayed({ r.stop() }, 800)
         } catch (e: Exception) {
-            // 取不到铃声就静默，日志照常
         }
     }
 
-    /** 待命循环：每200ms扫一次「确认抢单」，扫满待命时长就收工 */
-    private fun watchConfirm(ticksLeft: Int) {
-        if (!isRunning || currentMode != MainActivity.MODE_SENTRY) return
-        if (ticksLeft <= 0) {
-            log("[哨兵] 待命结束，未等到确认弹窗")
-            return
-        }
-        if (tryClickConfirm()) return  // 点到就完事，结束本轮
-        handler.postDelayed({ watchConfirm(ticksLeft - 1) }, 200)
-    }
-
-    /** 只找「确认抢单」，绝不碰主界面的「抢单」 */
+    /**
+     * ★ 只点「可见的真二级弹窗」上的「确认抢单」。
+     * 三道校验缺一不可：
+     *   1. 文本精确等于关键词（不是包含，杜绝"抢单"误匹配）
+     *   2. isVisibleToUser == true（隐形的预埋弹窗节点直接无视）
+     *   3. 区域在屏幕内且可点（自己或父级 clickable）
+     * 弹窗没弹 = 什么都不做 = 继续蹲
+     */
     private fun tryClickConfirm(): Boolean {
         val custom = sp.getString("confirm_keyword", "")?.trim() ?: ""
         val kw = if (custom.isNotEmpty()) custom else "确认抢单"
-
-        val node = rootInActiveWindow ?: return false
-        val found = node.findAccessibilityNodeInfosByText(kw)
-        if (found.isNullOrEmpty()) {
-            node.recycle()
-            return false
+        val root = rootInActiveWindow ?: return false
+        val candidates = root.findAccessibilityNodeInfosByText(kw)
+        var target: AccessibilityNodeInfo? = null
+        if (candidates != null) {
+            for (c in candidates) {
+                val txt = c.text?.toString() ?: continue
+                if (txt != kw) continue                 // ① 精确匹配
+                if (!c.isVisibleToUser) continue        // ② 只认看得见的
+                val r = Rect()
+                c.getBoundsInScreen(r)
+                if (r.isEmpty || r.top < 0 ||
+                    r.bottom > resources.displayMetrics.heightPixels) continue  // ③ 区域合法
+                target = c
+                break
+            }
         }
-        node.recycle()
-
+        if (target == null) {
+            root.recycle()
+            return false   // 没有真弹窗 → 继续等，绝不动手
+        }
         val now = System.currentTimeMillis()
         if (now - lastFire < 500) return true  // 刚点过防重复
         lastFire = now
-        log("[哨兵] 发现「$kw」→ 立即点击")
-        clickTarget(kw)
+        val r = Rect()
+        target.getBoundsInScreen(r)
+        target.recycle()
+        root.recycle()
+        log("[哨兵] 发现真弹窗「$kw」→ 立即点击")
+        clickNodeRect(r)
         return true
     }
 
-    // ============ 狙击/影子：窗口事件抓取 ============
+    // ============ 狙击/影子：窗口事件抓取（逻辑原样保留） ============
 
     private fun tryGrab(realClick: Boolean) {
         val custom = sp.getString("keyword", "")?.trim() ?: ""
         val keywords = if (custom.isNotEmpty()) listOf(custom)
         else listOf("抢单", "接单", "立即抢")
-
         val (minD, maxD) =
             Pair(sp.getInt("sniper_delay_min", 0), sp.getInt("sniper_delay_max", 200))
-
         val node: AccessibilityNodeInfo = rootInActiveWindow ?: return
         for (kw in keywords) {
             val targets = node.findAccessibilityNodeInfosByText(kw)
@@ -154,7 +184,6 @@ class GrabService : AccessibilityService() {
                 val now = System.currentTimeMillis()
                 if (now - lastFire < 300) return
                 lastFire = now
-
                 val delay = Random.nextLong(minD.toLong(), maxD.toLong() + 1)
                 val tag = MainActivity.MODE_NAMES[currentMode]
                 if (!realClick) {
@@ -171,25 +200,29 @@ class GrabService : AccessibilityService() {
         node.recycle()
     }
 
-    /** 坐标手势点击：找节点中心，模拟真实手指按下 */
+    /** 坐标手势点击：按关键词找节点中心（狙击/影子用） */
     private fun clickTarget(keyword: String) {
         val node = rootInActiveWindow ?: return
-        val t = node.findAccessibilityNodeInfosByText(keyword)?.firstOrNull()
+        val t = node.findAccessibilityNodeInfosByText(keyword)?.firstOrNull {
+            it.isVisibleToUser   // 顺手加一道可见性，狙击/影子同样不吃隐形节点
+        }
         if (t == null) {
             node.recycle()
             log("[命中] 点击时目标已消失")
             return
         }
-
         val r = Rect()
         t.getBoundsInScreen(r)
         node.recycle()
-
         if (r.isEmpty) {
             log("[命中] 目标区域无效")
             return
         }
+        clickNodeRect(r)
+    }
 
+    /** 统一的手势点击 + 记命中（哨兵/狙击/影子共用） */
+    private fun clickNodeRect(r: Rect) {
         val path = Path().apply { moveTo(r.exactCenterX(), r.exactCenterY()) }
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, 50))
@@ -208,7 +241,6 @@ class GrabService : AccessibilityService() {
             .apply()
     }
 
-    /** 写 logcat + 写 SP，让 MainActivity 能读到 */
     private fun log(msg: String) {
         android.util.Log.d("LightGrab", msg)
         val time = SimpleDateFormat("HH:mm:ss", Locale.CHINA).format(Date())
@@ -224,15 +256,9 @@ class GrabService : AccessibilityService() {
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "轻点前台服务", NotificationManager.IMPORTANCE_LOW)
         )
-        updateFgText()   // 首次进入前台
-    }
-
-    /** 前台通知文字跟随模式刷新 */
-    private fun updateFgText() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-        val nm = getSystemService(NotificationManager::class.java)
         val pi = PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java),
+            this, 0,
+            Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE
         )
         val n: Notification = Notification.Builder(this, CHANNEL_ID)
@@ -242,7 +268,7 @@ class GrabService : AccessibilityService() {
             .setContentIntent(pi)
             .setOngoing(true)
             .build()
-        nm.notify(NOTI_ID, n)
+        startForeground(NOTI_ID, n)
     }
 
     override fun onInterrupt() {
