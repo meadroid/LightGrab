@@ -87,7 +87,7 @@ class GrabService : AccessibilityService() {
         val watchSec = sp.getInt("sentry_watch_sec", 15)
         log("[哨兵] 通知触发，进入待命${watchSec}秒，等待你点「抢单」")
 
-        handler.postDelayed({ watchConfirm(watchSec * 1000L / 200L) }, 200)
+        handler.postDelayed({ watchConfirm(watchSec * 1000 / 200) }, 200)
     }
 
     /** 播放系统默认通知音（不震、不弹窗，响约0.8秒） */
