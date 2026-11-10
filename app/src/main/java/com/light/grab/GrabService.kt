@@ -115,23 +115,35 @@ class GrabService : AccessibilityService() {
         scheduleWatchTick(ticksLeft - 1, 200)
     }
 
-    /** 哨兵提示音：叮咚一声·闹钟通道·音量顶格 */
+    /** 哨兵提示音：直接播系统默认闹钟铃声·顶格响度（真闹钟级） */
     private fun playAlert() {
         Thread {
-            var tg: android.media.ToneGenerator? = null
+            var mp: android.media.MediaPlayer? = null
             try {
-                tg = android.media.ToneGenerator(
-                    android.media.AudioManager.STREAM_ALARM, 100)
-                tg.startTone(android.media.ToneGenerator.TONE_CDMA_CONFIRM, 500)
-                Thread.sleep(600)
+                val uri = android.media.RingtoneManager.getDefaultUri(
+                    android.media.RingtoneManager.TYPE_ALARM)
+                mp = android.media.MediaPlayer()
+                mp.setDataSource(this, uri)
+                // 音频属性设为闹钟用途，走闹钟音量，喇叭火力全开
+                mp.setAudioAttributes(
+                    android.media.AudioAttributes.Builder()
+                        .setUsage(android.media.AudioAttributes.USAGE_ALARM)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build())
+                mp.prepare()
+                mp.start()
+                Thread.sleep(1500)   // 放1.5秒收，铃声短的话自然播完
             } catch (e: Exception) {
+                // 兜底：闹钟铃声拿不到就退回ToneGenerator叮咚
                 try {
-                    val uri = android.provider.Settings.System.DEFAULT_NOTIFICATION_URI
-                    val r = android.media.RingtoneManager.getRingtone(this, uri)
-                    r.play()
+                    val tg = android.media.ToneGenerator(
+                        android.media.AudioManager.STREAM_ALARM, 100)
+                    tg.startTone(android.media.ToneGenerator.TONE_CDMA_CONFIRM, 500)
+                    Thread.sleep(600)
+                    tg.release()
                 } catch (_: Exception) {}
             } finally {
-                try { tg?.release() } catch (_: Exception) {}
+                try { mp?.stop(); mp?.release() } catch (_: Exception) {}
             }
         }.start()
     }
