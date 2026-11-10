@@ -9,7 +9,6 @@ import android.content.res.ColorStateList
 import android.os.Bundle
 import android.provider.Settings
 import android.text.InputType
-import android.view.Menu
 import android.view.MenuItem
 import android.widget.Button
 import android.widget.EditText
@@ -70,7 +69,7 @@ class MainActivity : AppCompatActivity() {
             findViewById<TextView>(id).setOnClickListener { setMode(index) }
         }
 
-        // 齿轮：从齿轮位置弹出武器库菜单（PopupMenu，不依赖ActionBar）
+        // 齿轮：从齿轮位置弹出武器库菜单
         btnArsenal.setOnClickListener { showArsenalMenu() }
 
         btnMain.setOnClickListener {
@@ -187,7 +186,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // 保留：PopupMenu 的菜单点击仍走这里处理
+    // PopupMenu 的菜单点击走这里处理
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return when (item.itemId) {
             R.id.action_target -> { askApp(); true }
@@ -201,12 +200,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 弹窗关闭后重新打开武器库菜单，停留在列表 */
-    private fun reopenMenu() {
-        runOnUiThread { showArsenalMenu() }
-    }
-
-    /** 三级：选择目标应用 */
+    /** 三级：选择目标应用（弹窗关闭即关闭，不再自动弹菜单） */
     private fun askApp() {
         val pm = packageManager
         val apps = pm.getInstalledPackages(0)
@@ -226,10 +220,8 @@ class MainActivity : AppCompatActivity() {
                     .putString("app_name", apps[which].first)
                     .apply()
                 Toast.makeText(this, "已选择 ${apps[which].first}", Toast.LENGTH_SHORT).show()
-                reopenMenu()
             }
-            .setNegativeButton("取消") { _, _ -> reopenMenu() }
-            .setOnCancelListener { reopenMenu() }
+            .setNegativeButton("取消", null)
             .show()
     }
 
@@ -246,10 +238,8 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton("保存") { _, _ ->
                 sp.edit().putString("keyword", input.text.toString().trim()).apply()
                 Toast.makeText(this, "已保存", Toast.LENGTH_SHORT).show()
-                reopenMenu()
             }
-            .setNegativeButton("取消") { _, _ -> reopenMenu() }
-            .setOnCancelListener { reopenMenu() }
+            .setNegativeButton("取消", null)
             .show()
     }
 
@@ -281,10 +271,8 @@ class MainActivity : AppCompatActivity() {
                 if (max < min) max = min
                 sp.edit().putInt(keyMin, min).putInt(keyMax, max).apply()
                 Toast.makeText(this, "已保存 ${min}~${max}ms", Toast.LENGTH_SHORT).show()
-                reopenMenu()
             }
-            .setNegativeButton("取消") { _, _ -> reopenMenu() }
-            .setOnCancelListener { reopenMenu() }
+            .setNegativeButton("取消", null)
             .show()
     }
 }
