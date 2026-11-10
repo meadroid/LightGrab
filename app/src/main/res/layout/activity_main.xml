@@ -5,45 +5,64 @@
     android:orientation="vertical"
     android:padding="16dp">
 
+    <!-- 标题行：左标题 + 右齿轮（替代原ActionBar） -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal">
+        android:orientation="horizontal"
+        android:gravity="center_vertical">
 
-        <TextView style="@style/Chip"
-            android:id="@+id/chipShadow"
-            android:text="影子" />
+        <TextView
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="wrap_content"
+            android:text="@string/title_text"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:textColor="@color/titleGray" />
 
-        <TextView style="@style/Chip"
-            android:id="@+id/chipSentry"
-            android:text="哨兵" />
-
-        <TextView style="@style/Chip"
-            android:id="@+id/chipSniper"
-            android:text="狙击" />
-
-        <TextView style="@style/Chip"
-            android:id="@+id/chipSilent"
-            android:text="静默" />
+        <TextView
+            android:id="@+id/btnArsenal"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:padding="6dp"
+            android:text="⚙️"
+            android:textSize="16sp"
+            android:contentDescription="@string/arsenal" />
     </LinearLayout>
 
+    <!-- 模式胶囊行 -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="10dp"
+        android:orientation="horizontal">
+
+        <TextView style="@style/Chip" android:id="@+id/chipShadow" android:text="🕵️ 影子" />
+        <TextView style="@style/Chip" android:id="@+id/chipSentry" android:text="🪖 哨兵" />
+        <TextView style="@style/Chip" android:id="@+id/chipSniper" android:text="🎯 狙击" />
+        <TextView style="@style/Chip" android:id="@+id/chipSilent" android:text="🌙 静默" />
+    </LinearLayout>
+
+    <!-- 监听按钮：40dp瘦身，绿/灰随状态 -->
     <Button
         android:id="@+id/btnMain"
         android:layout_width="match_parent"
-        android:layout_height="48dp"
-        android:layout_marginTop="16dp"
+        android:layout_height="40dp"
+        android:layout_marginTop="14dp"
         android:backgroundTint="@color/mint"
         android:textColor="@color/mintTextOn"
-        android:textSize="13sp"
+        android:textSize="12sp"
         android:text="开启监听" />
 
+    <!-- 状态三行：15sp加大、行距放宽 -->
     <TextView
         android:id="@+id/tvStatus"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="14dp"
-        android:lineSpacingExtra="3dp"
-        android:textSize="13sp"
+        android:lineSpacingExtra="6dp"
+        android:textSize="15sp"
         android:textColor="@color/grayText"
         android:fontFamily="monospace"
         android:text="♟️ 模式：待启动" />
@@ -66,12 +85,11 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:textSize="12sp"
-                android:textColor="@color/ink"
+                android:textColor="@color/grayText"
                 android:fontFamily="monospace"
                 android:text="" />
         </ScrollView>
 
-        <!-- 复制日志图标：与日志正文字号一致 -->
         <TextView
             android:id="@+id/btnCopyLog"
             android:layout_width="wrap_content"
