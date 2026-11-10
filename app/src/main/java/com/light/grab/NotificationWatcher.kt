@@ -34,9 +34,9 @@ class NotificationWatcher : NotificationListenerService() {
         lastKey = sbn.key
         lastTrigger = now
 
-        // 关键词过滤：设了关键词就只对包含它的通知触发，没设就全触发
+        // 关键词过滤：用「通知关键词」，和狙击关键词分开；留空=目标App任何新通知都触发
         val kw = getSharedPreferences("lightdot", MODE_PRIVATE)
-            .getString("keyword", "")?.trim() ?: ""
+            .getString("noti_keyword", "")?.trim() ?: ""
         if (kw.isNotEmpty()) {
             val extras = sbn.notification.extras
             val title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString() ?: ""
