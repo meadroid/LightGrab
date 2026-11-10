@@ -115,14 +115,18 @@ class GrabService : AccessibilityService() {
         scheduleWatchTick(ticksLeft - 1, 200)
     }
 
-    /** 播放系统默认通知音（不震、不弹窗，响约0.8秒） */
+    /** 哨兵提示音：用 ToneGenerator 直接发声，不依赖系统铃声设置，改铃声也不影响 */
     private fun playAlert() {
         try {
-            val uri = android.provider.Settings.System.DEFAULT_NOTIFICATION_URI
-            val r = android.media.RingtoneManager.getRingtone(this, uri)
-            r.play()
-            handler.postDelayed({ r.stop() }, 800)
+            val tg = android.media.ToneGenerator(android.media.AudioManager.STREAM_NOTIFICATION, 80)
+            tg.startTone(android.media.ToneGenerator.TONE_PROP_BEEP2, 300)
+            handler.postDelayed({ tg.release() }, 600)
         } catch (e: Exception) {
+            try {
+                val uri = android.provider.Settings.System.DEFAULT_NOTIFICATION_URI
+                val r = android.media.RingtoneManager.getRingtone(this, uri)
+                r.play()
+            } catch (_: Exception) {}
         }
     }
 
