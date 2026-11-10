@@ -49,14 +49,14 @@
     <Button
         android:id="@+id/btnMain"
         android:layout_width="match_parent"
-        android:layout_height="32dp"
+        android:layout_height="45dp"
         android:minHeight="0dp"
         android:insetTop="0dp"
         android:insetBottom="0dp"
         android:layout_marginTop="14dp"
         android:backgroundTint="@color/mint"
         android:textColor="@color/mintTextOn"
-        android:textSize="13sp"
+        android:textSize="14sp"
         android:text="开启监听" />
 
     <!-- 状态三行 -->
