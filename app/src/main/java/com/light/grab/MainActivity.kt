@@ -28,11 +28,12 @@ class MainActivity : AppCompatActivity() {
         const val MODE_SENTRY = 1
         const val MODE_SNIPER = 2
         const val MODE_SILENT = 3
+        const val MODE_FALCON = 4
 
-        val MODE_NAMES = listOf("影子", "哨兵", "狙击", "静默")
+        val MODE_NAMES = listOf("影子", "哨兵", "狙击", "静默", "猎鹰")
         val CHIP_IDS = listOf(
             R.id.chipShadow, R.id.chipSentry,
-            R.id.chipSniper, R.id.chipSilent
+            R.id.chipSniper, R.id.chipSilent, R.id.chipFalcon
         )
     }
 
@@ -44,7 +45,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnArsenal: TextView
     private val logBuf = StringBuilder()
     private var running = false
-    private var lastSvcLogPos = 0  // 已读到的服务日志位置
+    private var lastSvcLogPos = 0
 
     private val refresh = object : Runnable {
         override fun run() {
@@ -69,7 +70,6 @@ class MainActivity : AppCompatActivity() {
             findViewById<TextView>(id).setOnClickListener { setMode(index) }
         }
 
-        // 齿轮：从齿轮位置弹出武器库菜单
         btnArsenal.setOnClickListener { showArsenalMenu() }
 
         btnMain.setOnClickListener {
@@ -91,7 +91,6 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "日志已复制", Toast.LENGTH_SHORT).show()
         }
 
-        // 开机同步真实运行状态
         running = GrabService.isRunning
         updateMainBtn()
 
@@ -100,7 +99,6 @@ class MainActivity : AppCompatActivity() {
         tvStatus.post(refresh)
     }
 
-    /** 从齿轮位置弹出武器库菜单 */
     private fun showArsenalMenu() {
         val popup = PopupMenu(this, btnArsenal)
         popup.menuInflater.inflate(R.menu.menu_main, popup.menu)
@@ -108,7 +106,6 @@ class MainActivity : AppCompatActivity() {
         popup.show()
     }
 
-    /** 监听按钮：运行=绿，停止=灰，文字跟随状态 */
     private fun updateMainBtn() {
         btnMain.text = if (running) "停止监听" else "开启监听"
         val bg = if (running) R.color.mint else R.color.grayChip
@@ -131,6 +128,8 @@ class MainActivity : AppCompatActivity() {
                 chip.setTextColor(ContextCompat.getColor(this, R.color.grayText))
             }
         }
+        // ★ 前台通知联动：切胶囊，通知栏模式文字跟着变
+        GrabService.instance?.onModeChanged()
         refreshStatus()
         log("模式切换 → ${MODE_NAMES[mode]}")
     }
@@ -154,7 +153,6 @@ class MainActivity : AppCompatActivity() {
         tvStatus.text = "$line1\n$line2\n$line3"
     }
 
-    /** 把服务写进 SP 的日志同步到界面日志区 */
     private fun syncServiceLogs() {
         val svcLogs = sp.getString("svc_logs", "") ?: ""
         if (svcLogs.length <= lastSvcLogPos) return
@@ -186,7 +184,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // PopupMenu 的菜单点击走这里处理
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return when (item.itemId) {
             R.id.action_target -> { askApp(); true }
@@ -195,6 +192,7 @@ class MainActivity : AppCompatActivity() {
             R.id.action_ringtone -> { pickRingtone(); true }
             R.id.action_sentry_delay -> { askDelay("哨兵延时（最低~最高）", "sentry_delay_min", "sentry_delay_max"); true }
             R.id.action_sniper_delay -> { askDelay("狙击延时（最低~最高）", "sniper_delay_min", "sniper_delay_max"); true }
+            R.id.action_falcon_price -> { askFalconPrice(); true }
             R.id.action_permission -> {
                 startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); true
             }
@@ -202,7 +200,30 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 三级：选择目标应用 */
+    /** ★ 猎鹰最低价格：达标才报警 */
+    private fun askFalconPrice() {
+        val input = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setText(sp.getString("falcon_min_price", "4.00"))
+            setSingleLine(true)
+            hint = "如 4.00"
+        }
+        AlertDialog.Builder(this)
+            .setTitle("猎鹰最低价格（新单价格≥此值才响铃）")
+            .setView(input)
+            .setPositiveButton("保存") { _, _ ->
+                val v = input.text.toString().toDoubleOrNull()
+                if (v == null || v <= 0) {
+                    Toast.makeText(this, "请输入有效价格", Toast.LENGTH_SHORT).show()
+                } else {
+                    sp.edit().putString("falcon_min_price", String.format("%.2f", v)).apply()
+                    Toast.makeText(this, "猎鹰门槛已设为 $v", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
     private fun askApp() {
         val pm = packageManager
         val apps = pm.getInstalledPackages(0)
@@ -227,7 +248,6 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    /** 三级：关键词 */
     private fun askKeyword() {
         val input = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_TEXT
@@ -245,7 +265,6 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    /** 三级：通知关键词（哨兵过滤通知内容，和狙击关键词分开） */
     private fun askNotiKeyword() {
         val input = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_TEXT
@@ -263,14 +282,12 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    /** 三级：弹系统选铃声窗口，选完存URI */
     private fun pickRingtone() {
         val intent = Intent(android.media.RingtoneManager.ACTION_RINGTONE_PICKER).apply {
             putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_TYPE,
                      android.media.RingtoneManager.TYPE_NOTIFICATION)
             putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_TITLE, "选哨兵铃声")
             putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
-            // 回显当前选中的
             sp.getString("alert_uri", null)?.let {
                 putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_EXISTING_URI,
                          android.net.Uri.parse(it))
@@ -293,7 +310,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 三级：延时区间 */
     private fun askDelay(title: String, keyMin: String, keyMax: String) {
         val minInput = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_NUMBER
