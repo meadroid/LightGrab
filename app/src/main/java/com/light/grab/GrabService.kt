@@ -74,6 +74,27 @@ class GrabService : AccessibilityService() {
         }
     }
 
+    // ============ 前台通知联动：切胶囊时更新通知栏文字 ============
+
+    /** MainActivity.setMode() 调用：前台通知跟着模式变 */
+    fun onModeChanged() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val nm = getSystemService(NotificationManager::class.java)
+        val pi = PendingIntent.getActivity(
+            this, 0,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE
+        )
+        val n: Notification = Notification.Builder(this, CHANNEL_ID)
+            .setContentTitle("轻点运行中")
+            .setContentText("模式=${MainActivity.MODE_NAMES[currentMode]}")
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentIntent(pi)
+            .setOngoing(true)
+            .build()
+        nm.notify(NOTI_ID, n)
+    }
+
     // ============ 哨兵：通知来了 → 响铃 → 待命 → 只点可见的真二级弹窗 ============
 
     /** 通知监听器命中后调用：响铃提示 + 进入待命窗口 */
@@ -161,7 +182,7 @@ class GrabService : AccessibilityService() {
      * 三道校验缺一不可：
      *   1. 文本精确等于关键词（不是包含，杜绝"抢单"误匹配）
      *   2. isVisibleToUser == true（隐形的预埋弹窗节点直接无视）
-     *   3. 区域在屏幕内且可点（自己或父级 clickable）
+     *   3. 区域在屏幕内且合法
      * 弹窗没弹 = 什么都不做 = 继续蹲
      */
     private fun tryClickConfirm(): Boolean {
@@ -199,7 +220,7 @@ class GrabService : AccessibilityService() {
         return true
     }
 
-    // ============ 狙击/影子：窗口事件抓取（逻辑原样保留） ============
+    // ============ 狙击/影子：窗口事件抓取 ============
 
     private fun tryGrab(realClick: Boolean) {
         val custom = sp.getString("keyword", "")?.trim() ?: ""
@@ -234,7 +255,7 @@ class GrabService : AccessibilityService() {
     private fun clickTarget(keyword: String) {
         val node = rootInActiveWindow ?: return
         val t = node.findAccessibilityNodeInfosByText(keyword)?.firstOrNull {
-            it.isVisibleToUser   // 顺手加一道可见性，狙击/影子同样不吃隐形节点
+            it.isVisibleToUser
         }
         if (t == null) {
             node.recycle()
