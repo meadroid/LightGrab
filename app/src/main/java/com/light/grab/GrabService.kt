@@ -43,6 +43,10 @@ class GrabService : AccessibilityService() {
     // ★ 哨兵待命任务句柄：保证全服务同一时刻最多一条待命链
     private var watchTask: Runnable? = null
 
+    // ★ 猎鹰：扫描节流 + 冷静期
+    private var lastFalconScan = 0L
+    private var falconQuietUntil = 0L
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
@@ -70,7 +74,112 @@ class GrabService : AccessibilityService() {
             MainActivity.MODE_SHADOW -> tryGrab(realClick = false)
             MainActivity.MODE_SENTRY -> { /* 哨兵只由通知驱动，窗口事件不参与 */ }
             MainActivity.MODE_SNIPER -> if (isRunning) tryGrab(realClick = true)
+            MainActivity.MODE_FALCON -> if (isRunning) scanFalcon()
             MainActivity.MODE_SILENT -> { /* 静默：休眠 */ }
+        }
+    }
+
+    // ============ 猎鹰：扫主界面「新」标 → 同卡片价格达标 → 响铃报警 ============
+    // 职责单一：只看屏幕，不碰通知，不点击，只报警。
+
+    private fun scanFalcon() {
+        val now = System.currentTimeMillis()
+
+        // 冷静期：响过铃后60秒内不再扫，避免同一波单反复嚎
+        if (now < falconQuietUntil) return
+
+        // 节流：最快1秒扫一次
+        if (now - lastFalconScan < 1000) return
+        lastFalconScan = now
+
+        val root = rootInActiveWindow ?: return
+        try {
+            val minPrice = sp.getString("falcon_min_price", "4.00")
+                ?.toDoubleOrNull() ?: 4.00
+
+            // 找所有「新」标（精确匹配，杜绝“新任务”之类误伤）
+            val marks = root.findAccessibilityNodeInfosByText("新") ?: return
+            for (mark in marks) {
+                val txt = mark.text?.toString() ?: continue
+                if (txt != "新") continue
+                if (!mark.isVisibleToUser) continue
+
+                // 爬父链找卡片容器，再在卡片内找价格
+                val price = findPriceInCard(mark) ?: continue
+                if (price >= minPrice) {
+                    log("[猎鹰] 发现新单 价格=$price ≥ 门槛=$minPrice → 报警")
+                    falconQuietUntil = System.currentTimeMillis() + 60_000
+                    playAlert()
+                    return
+                } else {
+                    log("[猎鹰] 新单价格=$price 未达门槛 $minPrice，跳过")
+                }
+            }
+        } catch (e: Exception) {
+            log("[猎鹰] 扫描异常: ${e.message}")
+        } finally {
+            root.recycle()
+        }
+    }
+
+    /** 从「新」标向上爬最多5层，在卡片范围内找 ¥价格 */
+    private fun findPriceInCard(mark: AccessibilityNodeInfo): Double? {
+        var card: AccessibilityNodeInfo? = mark
+        for (i in 0 until 5) {
+            card = card?.parent ?: break
+            // 卡片里应该有价格文本，找到含 ¥ 的就解析
+            val prices = card.findAccessibilityNodeInfosByText("¥")
+            if (prices != null && prices.isNotEmpty()) {
+                for (p in prices) {
+                    val t = p.text?.toString() ?: continue
+                    val num = parsePrice(t)
+                    if (num != null) {
+                        p.recycle()
+                        recycleAll(prices)
+                        card.recycle()
+                        return num
+                    }
+                    p.recycle()
+                }
+                recycleAll(prices)
+            }
+        }
+        card?.recycle()
+        return null
+    }
+
+    /** 从 "¥12.5" / "¥12.5元" 之类文本里抠出数字 */
+    private fun parsePrice(text: String): Double? {
+        return try {
+            val s = text.replace("¥", "").replace("￥", "")
+                .trim().split("元")[0].trim()
+            s.toDoubleOrNull()
+        } catch (_: Exception) { null }
+    }
+
+    private fun recycleAll(list: List<AccessibilityNodeInfo>) {
+        list.forEach { try { it.recycle() } catch (_: Exception) {} }
+    }
+
+    // ============ 前台通知联动：切胶囊时更新通知栏文字 ============
+
+    /** MainActivity.setMode() 调用：前台通知跟着模式变 */
+    fun onModeChanged() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val nm = getSystemService(NotificationManager::class.java)
+            val pi = PendingIntent.getActivity(
+                this, 0,
+                Intent(this, MainActivity::class.java),
+                PendingIntent.FLAG_IMMUTABLE
+            )
+            val n: Notification = Notification.Builder(this, CHANNEL_ID)
+                .setContentTitle("轻点运行中")
+                .setContentText("模式=${MainActivity.MODE_NAMES[currentMode]}")
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentIntent(pi)
+                .setOngoing(true)
+                .build()
+            nm.notify(NOTI_ID, n)
         }
     }
 
@@ -122,7 +231,6 @@ class GrabService : AccessibilityService() {
     private fun playAlert() {
         val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
-        // 1. 闹钟音量临时拉满，记住原值，播完还原
         val old = am.getStreamVolume(AudioManager.STREAM_ALARM)
         am.setStreamVolume(
             AudioManager.STREAM_ALARM,
@@ -130,7 +238,6 @@ class GrabService : AccessibilityService() {
             0
         )
 
-        // 2. 播两遍，每遍2秒：第一遍0秒开始，第二遍2.5秒开始，共约4.5秒
         repeat(2) { i ->
             handler.postDelayed({
                 try {
@@ -138,7 +245,7 @@ class GrabService : AccessibilityService() {
                     val r = RingtoneManager.getRingtone(this, uri)
                     r?.setAudioAttributes(
                         AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_ALARM)   // ← 关键：伪装成真闹钟
+                            .setUsage(AudioAttributes.USAGE_ALARM)
                             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                             .build()
                     )
@@ -150,7 +257,6 @@ class GrabService : AccessibilityService() {
             }, i * 2500L)
         }
 
-        // 3. 约5秒后还原闹钟音量
         handler.postDelayed({
             am.setStreamVolume(AudioManager.STREAM_ALARM, old, 0)
         }, 5000)
@@ -159,10 +265,9 @@ class GrabService : AccessibilityService() {
     /**
      * ★ 只点「可见的真二级弹窗」上的「确认抢单」。
      * 三道校验缺一不可：
-     *   1. 文本精确等于关键词（不是包含，杜绝"抢单"误匹配）
-     *   2. isVisibleToUser == true（隐形的预埋弹窗节点直接无视）
-     *   3. 区域在屏幕内且可点（自己或父级 clickable）
-     * 弹窗没弹 = 什么都不做 = 继续蹲
+     *   1. 文本精确等于关键词
+     *   2. isVisibleToUser == true
+     *   3. 区域在屏幕内且可点
      */
     private fun tryClickConfirm(): Boolean {
         val custom = sp.getString("confirm_keyword", "")?.trim() ?: ""
@@ -173,22 +278,22 @@ class GrabService : AccessibilityService() {
         if (candidates != null) {
             for (c in candidates) {
                 val txt = c.text?.toString() ?: continue
-                if (txt != kw) continue                 // ① 精确匹配
-                if (!c.isVisibleToUser) continue        // ② 只认看得见的
+                if (txt != kw) continue
+                if (!c.isVisibleToUser) continue
                 val r = Rect()
                 c.getBoundsInScreen(r)
                 if (r.isEmpty || r.top < 0 ||
-                    r.bottom > resources.displayMetrics.heightPixels) continue  // ③ 区域合法
+                    r.bottom > resources.displayMetrics.heightPixels) continue
                 target = c
                 break
             }
         }
         if (target == null) {
             root.recycle()
-            return false   // 没有真弹窗 → 继续等，绝不动手
+            return false
         }
         val now = System.currentTimeMillis()
-        if (now - lastFire < 500) return true  // 刚点过防重复
+        if (now - lastFire < 500) return true
         lastFire = now
         val r = Rect()
         target.getBoundsInScreen(r)
@@ -234,7 +339,7 @@ class GrabService : AccessibilityService() {
     private fun clickTarget(keyword: String) {
         val node = rootInActiveWindow ?: return
         val t = node.findAccessibilityNodeInfosByText(keyword)?.firstOrNull {
-            it.isVisibleToUser   // 顺手加一道可见性，狙击/影子同样不吃隐形节点
+            it.isVisibleToUser
         }
         if (t == null) {
             node.recycle()
