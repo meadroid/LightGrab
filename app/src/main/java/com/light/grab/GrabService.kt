@@ -115,16 +115,54 @@ class GrabService : AccessibilityService() {
         scheduleWatchTick(ticksLeft - 1, 200)
     }
 
-    /** 播放系统默认通知音（不震、不弹窗，响约0.8秒） */
+    /** 走闹钟通道 + 音量拉满 + 三声 + 振动 */
     private fun playAlert() {
-        try {
-            val uri = android.provider.Settings.System.DEFAULT_NOTIFICATION_URI
-            val r = android.media.RingtoneManager.getRingtone(this, uri)
-            r.play()
-            handler.postDelayed({ r.stop() }, 800)
-        } catch (e: Exception) {
+    val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+    // 1. 闹钟音量临时拉满，记住原值，播完还原
+    val old = am.getStreamVolume(AudioManager.STREAM_ALARM)
+    am.setStreamVolume(
+        AudioManager.STREAM_ALARM,
+        am.getStreamMaxVolume(AudioManager.STREAM_ALARM),
+        0
+    )
+
+    // 2. 三下短震（兜里贴身，风噪再大也感觉得到）
+    try {
+        val vib = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            vib.vibrate(VibrationEffect.createWaveform(longArrayOf(0,300,200,300,200,300), -1))
+        } else {
+            @Suppress("DEPRECATION")
+            vib.vibrate(longArrayOf(0,300,200,300,200,300))
         }
+    } catch (_: Exception) {}
+
+    // 3. 系统默认闹钟铃声，连响三声（走 STREAM_ALARM 通道）
+    repeat(3) { i ->
+        handler.postDelayed({
+            try {
+                val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                val r = RingtoneManager.getRingtone(this, uri)
+                r?.setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_ALARM)   // ← 关键：伪装成真闹钟
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                )
+                r?.play()
+                handler.postDelayed({ try { r?.stop() } catch (_: Exception) {} }, 800)
+            } catch (e: Exception) {
+                log("[铃声] 第${i+1}声失败: ${e.message}")
+            }
+        }, i * 1100L)
     }
+
+    // 4. 约4秒后还原闹钟音量
+    handler.postDelayed({
+        am.setStreamVolume(AudioManager.STREAM_ALARM, old, 0)
+    }, 4000)
+}
 
     /**
      * ★ 只点「可见的真二级弹窗」上的「确认抢单」。
