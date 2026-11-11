@@ -33,6 +33,11 @@
         app:showAsAction="never" />
 
     <item
+        android:id="@+id/action_falcon_price"
+        android:title="猎鹰最低价格"
+        app:showAsAction="never" />
+
+    <item
         android:id="@+id/action_permission"
         android:title="开启权限"
         app:showAsAction="never" />
