@@ -43,10 +43,12 @@ class GrabService : AccessibilityService() {
     // ★ 哨兵待命任务句柄：保证全服务同一时刻最多一条待命链
     private var watchTask: Runnable? = null
 
-    // ★ 猎鹰：扫描节流 + 冷静期 + 日志限频
+    // ★ 猎鹰：扫描节流 + 冷静期
     private var lastFalconScan = 0L
     private var falconQuietUntil = 0L
-    private var lastFalconLog = 0L
+
+    // ★ 探针日志限频
+    private var lastProbeLog = 0L
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -80,10 +82,8 @@ class GrabService : AccessibilityService() {
         }
     }
 
-    // ============ 猎鹰：扫屏上 ¥价格 → 最大值达标 → 响铃报警 ============
+    // ============ 猎鹰：扫主界面「新」标 → 同卡片价格达标 → 响铃报警 ============
     // 职责单一：只看屏幕，不碰通知，不点击，只报警。
-    // ★ 不依赖「新」标：直接全屏找可见 ¥价格，取最大值比门槛。
-    // ★ 全程打日志（限频）：哑巴时日志开口，扫到什么、比成什么，一目了然。
 
     private fun scanFalcon() {
         val now = System.currentTimeMillis()
@@ -95,56 +95,46 @@ class GrabService : AccessibilityService() {
         if (now - lastFalconScan < 1000) return
         lastFalconScan = now
 
+        // ★ 探针：诊断本屏「新」字的形态（排查期临时用，定位后删这行）
+        probeDump()
+
         val root = rootInActiveWindow ?: return
         try {
             val minPrice = sp.getString("falcon_min_price", "4.00")
                 ?.toDoubleOrNull() ?: 4.00
 
-            // 探针：诊断本屏「新」和 ¥ 的分布（排查期临时用，问题定位后可删）
-            probeDump()
+            // 找所有「新」标（精确匹配，杜绝“新任务”之类误伤）
+            val marks = root.findAccessibilityNodeInfosByText("新") ?: return
+            for (mark in marks) {
+                val txt = mark.text?.toString() ?: continue
+                if (txt != "新") continue
+                if (!mark.isVisibleToUser) continue
 
-            // 直接全屏找含 ¥ 的可见文本，不依赖「新」标
-            val priceNodes = root.findAccessibilityNodeInfosByText("¥")
-            if (priceNodes.isNullOrEmpty()) {
-                logThrottled("[猎鹰] 本屏无¥价格节点（可能不在新任务页）")
-                return
-            }
-
-            var maxPrice: Double? = null
-            var rawSample = ""
-            for (p in priceNodes) {
-                val t = p.text?.toString() ?: continue
-                if (!p.isVisibleToUser) continue
-                val num = parsePrice(t)
-                if (num != null && (maxPrice == null || num > maxPrice)) {
-                    maxPrice = num
-                    rawSample = t
+                // 爬父链找卡片容器，再在卡片内找价格
+                val price = findPriceInCard(mark) ?: continue
+                if (price >= minPrice) {
+                    log("[猎鹰] 发现新单 价格=$price ≥ 门槛=$minPrice → 报警")
+                    falconQuietUntil = System.currentTimeMillis() + 60_000
+                    playAlert()
+                    return
+                } else {
+                    log("[猎鹰] 新单价格=$price 未达门槛 $minPrice，跳过")
                 }
-            }
-            recycleAll(priceNodes)
-
-            if (maxPrice == null) {
-                logThrottled("[猎鹰] 找到¥节点但均解析失败，样本:「$rawSample」")
-                return
-            }
-
-            if (maxPrice >= minPrice) {
-                log("[猎鹰] 发现新单 最高=$maxPrice (「$rawSample」) ≥ 门槛=$minPrice → 报警")
-                falconQuietUntil = System.currentTimeMillis() + 60_000
-                playAlert()
-            } else {
-                logThrottled("[猎鹰] 最高=$maxPrice 未达门槛 $minPrice，跳过")
             }
         } catch (e: Exception) {
             log("[猎鹰] 扫描异常: ${e.message}")
         } finally {
-            try { root.recycle() } catch (_: Exception) {}
+            root.recycle()
         }
     }
 
-    /** 猎鹰探针：诊断无障碍树里「新」的形态（排查期临时用） */
+    /** ★ 探针：遍历无障碍树，数「新」字的两种形态 + ¥节点数（排查期临时用） */
     private fun probeDump() {
         try {
+            val now = System.currentTimeMillis()
+            if (now - lastProbeLog < 60_000) return   // 限频：1分钟最多记一条
+            lastProbeLog = now
+
             val root = rootInActiveWindow ?: return
             var textNew = 0
             var descNew = 0
@@ -164,27 +154,45 @@ class GrabService : AccessibilityService() {
                 }
             }
             walk(root, 0)
-            logThrottled("[猎鹰·探针] 文本「新」=$textNew 描述「新」=$descNew ¥节点=$priceN")
+            log("[猎鹰·探针] 文本「新」=$textNew 描述「新」=$descNew ¥节点=$priceN")
             try { root.recycle() } catch (_: Exception) {}
         } catch (e: Exception) {
             log("[猎鹰·探针] 异常: ${e.message}")
         }
     }
 
-    /** 同一句话1分钟内不重复记，防止日志刷屏 */
-    private fun logThrottled(msg: String) {
-        val now = System.currentTimeMillis()
-        if (now - lastFalconLog < 60_000) return
-        lastFalconLog = now
-        log(msg)
+    /** 从「新」标向上爬最多5层，在卡片范围内找 ¥价格 */
+    private fun findPriceInCard(mark: AccessibilityNodeInfo): Double? {
+        var card: AccessibilityNodeInfo? = mark
+        for (i in 0 until 5) {
+            card = card?.parent ?: break
+            // 卡片里应该有价格文本，找到含 ¥ 的就解析
+            val prices = card.findAccessibilityNodeInfosByText("¥")
+            if (prices != null && prices.isNotEmpty()) {
+                for (p in prices) {
+                    val t = p.text?.toString() ?: continue
+                    val num = parsePrice(t)
+                    if (num != null) {
+                        p.recycle()
+                        recycleAll(prices)
+                        card.recycle()
+                        return num
+                    }
+                    p.recycle()
+                }
+                recycleAll(prices)
+            }
+        }
+        card?.recycle()
+        return null
     }
 
-    /** 从 "¥3.2" / "￥10.68元" / "¥ 3.2" 之类文本里抠出数字（一位/两位小数都行） */
+    /** 从 "¥12.5" / "¥12.5元" 之类文本里抠出数字 */
     private fun parsePrice(text: String): Double? {
         return try {
-            val regex = Regex("""[¥￥]\s*(\d+(?:\.\d{1,2})?)""")
-            val m = regex.find(text) ?: return null
-            m.groupValues[1].toDoubleOrNull()
+            val s = text.replace("¥", "").replace("￥", "")
+                .trim().split("元")[0].trim()
+            s.toDoubleOrNull()
         } catch (_: Exception) { null }
     }
 
@@ -207,8 +215,8 @@ class GrabService : AccessibilityService() {
                 .setContentTitle("轻点运行中")
                 .setContentText("模式=${MainActivity.MODE_NAMES[currentMode]}")
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
-                .setOngoing(true)
                 .setContentIntent(pi)
+                .setOngoing(true)
                 .build()
             nm.notify(NOTI_ID, n)
         }
@@ -256,6 +264,41 @@ class GrabService : AccessibilityService() {
         }
         if (tryClickConfirm()) return  // 点到真弹窗，本轮结束
         scheduleWatchTick(ticksLeft - 1, 200)
+    }
+
+    /** 走闹钟通道 + 音量拉满 + 每声2秒播两遍（无震动） */
+    private fun playAlert() {
+        val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+        val old = am.getStreamVolume(AudioManager.STREAM_ALARM)
+        am.setStreamVolume(
+            AudioManager.STREAM_ALARM,
+            am.getStreamMaxVolume(AudioManager.STREAM_ALARM),
+            0
+        )
+
+        repeat(2) { i ->
+            handler.postDelayed({
+                try {
+                    val uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                    val r = RingtoneManager.getRingtone(this, uri)
+                    r?.setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_ALARM)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .build()
+                    )
+                    r?.play()
+                    handler.postDelayed({ try { r?.stop() } catch (_: Exception) {} }, 2000)
+                } catch (e: Exception) {
+                    log("[铃声] 第${i + 1}遍失败: ${e.message}")
+                }
+            }, i * 2500L)
+        }
+
+        handler.postDelayed({
+            am.setStreamVolume(AudioManager.STREAM_ALARM, old, 0)
+        }, 5000)
     }
 
     /**
@@ -382,9 +425,7 @@ class GrabService : AccessibilityService() {
     }
 
     private fun startFg() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-            return
-        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val nm = getSystemService(NotificationManager::class.java)
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "轻点前台服务", NotificationManager.IMPORTANCE_LOW)
@@ -398,8 +439,8 @@ class GrabService : AccessibilityService() {
             .setContentTitle("轻点运行中")
             .setContentText("模式=${MainActivity.MODE_NAMES[currentMode]}")
             .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setOngoing(true)
             .setContentIntent(pi)
+            .setOngoing(true)
             .build()
         startForeground(NOTI_ID, n)
     }
