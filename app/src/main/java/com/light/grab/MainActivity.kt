@@ -131,6 +131,8 @@ class MainActivity : AppCompatActivity() {
                 chip.setTextColor(ContextCompat.getColor(this, R.color.grayText))
             }
         }
+        // ★ 前台通知联动：切胶囊，通知栏模式文字跟着变
+        GrabService.instance?.onModeChanged()
         refreshStatus()
         log("模式切换 → ${MODE_NAMES[mode]}")
     }
