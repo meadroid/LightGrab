@@ -150,14 +150,14 @@ class GrabService : AccessibilityService() {
         nm.notify(NOTI_ID, n)
     }
 
-    // ============ 哨兵：声音触发 → 响铃 → 待命 → 点真二级弹窗 ============
+    // ============ 哨兵：声音触发 → 立刻响铃 → 待命扫弹窗（延时在点击前） ============
     fun onNotiFired() {
         if (!isRunning) return
         if (currentMode != MainActivity.MODE_SENTRY) return
         cancelWatch()
         playAlert()
         val watchSec = sp.getInt("sentry_watch_sec", 15)
-        log("[哨兵] 声音触发，进入待命${watchSec}秒，等待你点「抢单」")
+        log("[哨兵] 声音触发，进入待命${watchSec}秒，等待弹窗")
         val ticks = watchSec * 1000 / 200
         scheduleWatchTick(ticks, 200)
     }
@@ -224,7 +224,7 @@ class GrabService : AccessibilityService() {
         }, 5000)
     }
 
-    /** 只点「可见的真二级弹窗」。四道校验缺一不可 */
+    /** 只点「可见的真二级弹窗」。四道校验 → 特征词✅ → 反应延时 → 点击 */
     private fun tryClickConfirm(): Boolean {
         val custom = sp.getString("confirm_keyword", "")?.trim() ?: ""
         val kw = if (custom.isNotEmpty()) custom else "确认抢单"
@@ -281,8 +281,16 @@ class GrabService : AccessibilityService() {
         val now = System.currentTimeMillis()
         if (now - lastFire < 500) return true
         lastFire = now
-        log("[哨兵] 弹窗校验通过「$kw」→ 立即点击")
-        clickNodeRect(btnRect)
+        // ★ 哨兵延时：特征词通过后，模拟人的反应时间再点（设置页「哨兵延时」）
+        val minD = sp.getInt("sentry_delay_min", 0)
+        val maxD = sp.getInt("sentry_delay_max", 0)
+        val delay = Random.nextLong(minD.toLong(), maxD.toLong() + 1)
+        log("[哨兵] 弹窗校验通过「$kw」，反应延时${delay}ms后点击")
+        handler.postDelayed({
+            if (isRunning && currentMode == MainActivity.MODE_SENTRY) {
+                clickNodeRect(btnRect)
+            }
+        }, delay)
         return true
     }
 
