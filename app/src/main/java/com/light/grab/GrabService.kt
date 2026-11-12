@@ -21,7 +21,6 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.RingtoneManager
 import android.media.projection.MediaProjectionManager
-import android.media.projection.AudioPlaybackCaptureConfiguration
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -98,7 +97,32 @@ class GrabService : AccessibilityService() {
         log("[服务] 被中断")
     }
 
-    // ============ [声纹] 启动音频捕获（直连版，无反射） ============
+    // ============ [声纹] 反射构建音频捕获 AudioRecord（编译期不依赖 AudioPlaybackCaptureConfiguration） ============
+    private fun buildCaptureRecord(mp: android.media.projection.MediaProjection, fmt: AudioFormat, bufSize: Int): AudioRecord {
+        val cfgBuilderCls = Class.forName("android.media.projection.AudioPlaybackCaptureConfiguration\$Builder")
+        val cfgBuilder = cfgBuilderCls.getConstructor(android.media.projection.MediaProjection::class.java)
+            .newInstance(mp)
+        for (usage in intArrayOf(
+            AudioAttributes.USAGE_MEDIA,
+            AudioAttributes.USAGE_GAME,
+            AudioAttributes.USAGE_UNKNOWN
+        )) {
+            cfgBuilderCls.getMethod("addMatchingUsage", Int::class.javaPrimitiveType)
+                .invoke(cfgBuilder, usage)
+        }
+        val cfg = cfgBuilderCls.getMethod("build").invoke(cfgBuilder)
+
+        val arbCls = AudioRecord.Builder::class.java
+        val arb = arbCls.getDeclaredConstructor().newInstance()
+        arbCls.getMethod("setAudioFormat", AudioFormat::class.java).invoke(arb, fmt)
+        arbCls.getMethod("setBufferSizeInBytes", Int::class.javaPrimitiveType)
+            .invoke(arb, bufSize)
+        val cfgCls = Class.forName("android.media.projection.AudioPlaybackCaptureConfiguration")
+        arbCls.getMethod("setAudioPlaybackCaptureConfig", cfgCls).invoke(arb, cfg)
+        return arb.build()
+    }
+
+    // ============ [声纹] 启动音频捕获 ============
     fun startVoiceprintIfPossible() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             log("[声纹] 系统低于安卓10，不支持捕获（自动放行模式）")
@@ -131,12 +155,6 @@ class GrabService : AccessibilityService() {
             mediaProjection = mpm.getMediaProjection(MainActivity.projResultCode, data)
 
             val mp = mediaProjection!!
-            val cfg = AudioPlaybackCaptureConfiguration.Builder(mp)
-                .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
-                .addMatchingUsage(AudioAttributes.USAGE_GAME)
-                .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
-                .build()
-
             val fmt = AudioFormat.Builder()
                 .setSampleRate(44100)
                 .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
@@ -145,11 +163,7 @@ class GrabService : AccessibilityService() {
             val minBuf = AudioRecord.getMinBufferSize(
                 44100, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
             )
-            vpRecord = AudioRecord.Builder()
-                .setAudioFormat(fmt)
-                .setBufferSizeInBytes(minBuf.coerceAtLeast(65536))
-                .setAudioPlaybackCaptureConfig(cfg)
-                .build()
+            vpRecord = buildCaptureRecord(mp, fmt, minBuf.coerceAtLeast(65536))
             vpRecord?.startRecording()
             vpThread = Thread { captureLoop() }.apply {
                 name = "vp-capture"
