@@ -92,7 +92,7 @@ class GrabService : AccessibilityService() {
         log("[服务] 被中断")
     }
 
-    // ============ [声纹] 启动音频捕获 ============
+    // ============ [声纹] 启动音频捕获（反射版，编译期不引用新类） ============
     fun startVoiceprintIfPossible() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             log("[声纹] 系统低于安卓10，不支持捕获（自动放行模式）")
@@ -104,34 +104,39 @@ class GrabService : AccessibilityService() {
             val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
             mediaProjection = mpm.getMediaProjection(MainActivity.projResultCode, data)
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                val nm = getSystemService(NotificationManager::class.java)
-                nm.createNotificationChannel(
-                    NotificationChannel("lightgrab_vp", "轻点声纹", NotificationManager.IMPORTANCE_LOW)
-                )
-                val pi = PendingIntent.getActivity(
-                    this, 1, Intent(this, MainActivity::class.java),
-                    PendingIntent.FLAG_IMMUTABLE
-                )
-                val n: Notification = Notification.Builder(this, "lightgrab_vp")
-                    .setContentTitle("轻点声纹监听中")
-                    .setContentText("正在比对目标App提示音")
-                    .setSmallIcon(android.R.drawable.ic_dialog_info)
-                    .setContentIntent(pi)
-                    .setOngoing(true)
-                    .build()
-                startForeground(
-                    NOTI_ID_VP, n,
-                    android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-                )
-            }
+            val nm = getSystemService(NotificationManager::class.java)
+            nm.createNotificationChannel(
+                NotificationChannel("lightgrab_vp", "轻点声纹", NotificationManager.IMPORTANCE_LOW)
+            )
+            val pi = PendingIntent.getActivity(
+                this, 1, Intent(this, MainActivity::class.java),
+                PendingIntent.FLAG_IMMUTABLE
+            )
+            val n: Notification = Notification.Builder(this, "lightgrab_vp")
+                .setContentTitle("轻点声纹监听中")
+                .setContentText("正在比对目标App提示音")
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setContentIntent(pi)
+                .setOngoing(true)
+                .build()
+            startForeground(
+                NOTI_ID_VP, n,
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+            )
 
             val mp = mediaProjection!!
-            val cfg = android.media.projection.AudioPlaybackCaptureConfiguration.Builder(mp)
-                .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
-                .addMatchingUsage(AudioAttributes.USAGE_GAME)
-                .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
-                .build()
+            val cfgClass = Class.forName("android.media.projection.AudioPlaybackCaptureConfiguration")
+            val cfgBuilder = cfgClass.getDeclaredConstructor(
+                android.media.projection.MediaProjection::class.java
+            ).newInstance(mp)
+            val addUsage = cfgClass.getMethod(
+                "addMatchingUsage", Int::class.javaPrimitiveType
+            )
+            addUsage.invoke(cfgBuilder, AudioAttributes.USAGE_MEDIA)
+            addUsage.invoke(cfgBuilder, AudioAttributes.USAGE_GAME)
+            addUsage.invoke(cfgBuilder, AudioAttributes.USAGE_UNKNOWN)
+            val cfg = cfgClass.getMethod("build").invoke(cfgBuilder)
+
             val fmt = AudioFormat.Builder()
                 .setSampleRate(44100)
                 .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
@@ -140,11 +145,13 @@ class GrabService : AccessibilityService() {
             val minBuf = AudioRecord.getMinBufferSize(
                 44100, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
             )
-            vpRecord = AudioRecord.Builder()
+            val arBuilder = AudioRecord.Builder()
                 .setAudioFormat(fmt)
                 .setBufferSizeInBytes(minBuf.coerceAtLeast(65536))
-                .setAudioPlaybackCaptureConfig(cfg)
-                .build()
+            AudioRecord.Builder::class.java.getMethod(
+                "setAudioPlaybackCaptureConfig", cfgClass
+            ).invoke(arBuilder, cfg)
+            vpRecord = arBuilder.build()
             vpRecord?.startRecording()
             vpThread = Thread { captureLoop() }.apply {
                 name = "vp-capture"
