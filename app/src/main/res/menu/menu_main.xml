@@ -14,10 +14,6 @@
         android:title="关键词"
         app:showAsAction="never" />
     <item
-        android:id="@+id/action_noti_keyword"
-        android:title="通知词"
-        app:showAsAction="never" />
-    <item
         android:id="@+id/action_ringtone"
         android:title="铃声库"
         app:showAsAction="never" />
