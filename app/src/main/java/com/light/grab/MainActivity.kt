@@ -176,7 +176,6 @@ class MainActivity : AppCompatActivity() {
             R.id.action_target -> { askApp(); true }
             R.id.action_feature_word -> { askFeatureWord(); true }
             R.id.action_keyword -> { askKeyword(); true }
-            R.id.action_noti_keyword -> { askNotiKeyword(); true }
             R.id.action_ringtone -> { pickRingtone(); true }
             R.id.action_sentry_delay -> { askDelay("哨兵岗（延时最低~最高）", "sentry_delay_min", "sentry_delay_max"); true }
             R.id.action_sniper_delay -> { askDelay("狙击岗（延时最低~最高）", "sniper_delay_min", "sniper_delay_max"); true }
@@ -246,24 +245,7 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun askNotiKeyword() {
-        val input = EditText(this).apply {
-            inputType = InputType.TYPE_CLASS_TEXT
-            setText(sp.getString("noti_keyword", ""))
-            setSingleLine(true)
-        }
-        AlertDialog.Builder(this)
-            .setTitle("通知词（新单通知里必须出现的字，如：新单）")
-            .setView(input)
-            .setPositiveButton("保存") { _, _ ->
-                sp.edit().putString("noti_keyword", input.text.toString().trim()).apply()
-                Toast.makeText(this, "已保存，留空=目标App任何新通知都触发", Toast.LENGTH_LONG).show()
-            }
-            .setNegativeButton("取消", null)
-            .show()
-    }
-
-    /** ★ 铃声库：选闹钟铃声（和播放通道一致），选完存URI，真正生效 */
+    /** 铃声库：选闹钟铃声（和播放通道一致），选完真正生效 */
     private fun pickRingtone() {
         val intent = Intent(android.media.RingtoneManager.ACTION_RINGTONE_PICKER).apply {
             putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_TYPE,
@@ -285,7 +267,6 @@ class MainActivity : AppCompatActivity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == 777 && resultCode == RESULT_OK) {
-            // ★ 判空：用户取消/返回时 data 为 null，直接跳过
             val uri = data?.getParcelableExtra<android.net.Uri>(
                 android.media.RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
             if (uri != null) {
