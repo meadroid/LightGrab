@@ -70,14 +70,18 @@ class GrabService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        startFg()
-        currentMode = sp.getInt("mode", MainActivity.MODE_SHADOW)
-        checkMediaVolume()
-        buildBaseline()
-        registerSoundSentry()
-        startWatchdog()
-        startVoiceprintIfPossible()
-        log("[服务] 已连接，模式=${MainActivity.MODE_NAMES[currentMode]}")
+        try {
+            startFg()
+            currentMode = sp.getInt("mode", MainActivity.MODE_SHADOW)
+            log("[服务] 已连接，模式=${MainActivity.MODE_NAMES[currentMode]}")
+        } catch (e: Exception) {
+            log("[服务] 基础启动异常: ${e.message}")
+        }
+        try { checkMediaVolume() } catch (e: Exception) { log("[自检] 异常: ${e.message}") }
+        try { buildBaseline() } catch (e: Exception) { log("[声纹] 基准异常: ${e.message}") }
+        try { registerSoundSentry() } catch (e: Exception) { log("[哨兵] 注册异常: ${e.message}") }
+        try { startWatchdog() } catch (e: Exception) { log("[看门狗] 异常: ${e.message}") }
+        try { startVoiceprintIfPossible() } catch (e: Exception) { log("[声纹] 启动异常: ${e.message}") }
     }
 
     override fun onDestroy() {
@@ -533,22 +537,26 @@ class GrabService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        event ?: return
-        touchHeartbeat()
-        val t = event.eventType
-        if (t != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
-            t != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED &&
-            t != AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
-        ) return
-        val pkg = event.packageName?.toString() ?: return
-        if (pkg == packageName) return
-        val targetPkg = sp.getString("app_pkg", null)
-        if (targetPkg != null && pkg != targetPkg) return
-        when (currentMode) {
-            MainActivity.MODE_SHADOW -> tryGrab(realClick = false)
-            MainActivity.MODE_SENTRY -> { /* 哨兵由声音驱动 */ }
-            MainActivity.MODE_SNIPER -> if (isRunning) tryGrab(realClick = true)
-            MainActivity.MODE_SILENT -> { /* 静默：休眠 */ }
+        try {
+            event ?: return
+            touchHeartbeat()
+            val t = event.eventType
+            if (t != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+                t != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED &&
+                t != AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
+            ) return
+            val pkg = event.packageName?.toString() ?: return
+            if (pkg == packageName) return
+            val targetPkg = sp.getString("app_pkg", null)
+            if (targetPkg != null && pkg != targetPkg) return
+            when (currentMode) {
+                MainActivity.MODE_SHADOW -> tryGrab(realClick = false)
+                MainActivity.MODE_SENTRY -> { /* 哨兵由声音驱动 */ }
+                MainActivity.MODE_SNIPER -> if (isRunning) tryGrab(realClick = true)
+                MainActivity.MODE_SILENT -> { /* 静默：休眠 */ }
+            }
+        } catch (e: Exception) {
+            log("[事件] 异常: ${e.message}")
         }
     }
 
