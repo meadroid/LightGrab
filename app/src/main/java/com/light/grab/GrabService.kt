@@ -74,7 +74,7 @@ class GrabService : AccessibilityService() {
         try {
             startFg()
             currentMode = sp.getInt("mode", MainActivity.MODE_SHADOW)
-            log("[服务] 已连接，模式=${MainActivity.MODE_NAMES[currentMode]}")
+            log("[服务] 已连接 v-direct-0513，模式=${MainActivity.MODE_NAMES[currentMode]}")
         } catch (e: Exception) {
             log("[服务] 基础启动异常: ${e.message}")
         }
@@ -97,7 +97,7 @@ class GrabService : AccessibilityService() {
         log("[服务] 被中断")
     }
 
-    // ============ [声纹] 启动音频捕获（反射版，编译期不引用新类） ============
+    // ============ [声纹] 启动音频捕获（直连版，无反射） ============
     fun startVoiceprintIfPossible() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             log("[声纹] 系统低于安卓10，不支持捕获（自动放行模式）")
@@ -130,17 +130,11 @@ class GrabService : AccessibilityService() {
             mediaProjection = mpm.getMediaProjection(MainActivity.projResultCode, data)
 
             val mp = mediaProjection!!
-            val cfgClass = Class.forName("android.media.projection.AudioPlaybackCaptureConfiguration")
-            val cfgBuilder = cfgClass.getDeclaredConstructor(
-                android.media.projection.MediaProjection::class.java
-            ).newInstance(mp)
-            val addUsage = cfgClass.getMethod(
-                "addMatchingUsage", Int::class.javaPrimitiveType
-            )
-            addUsage.invoke(cfgBuilder, AudioAttributes.USAGE_MEDIA)
-            addUsage.invoke(cfgBuilder, AudioAttributes.USAGE_GAME)
-            addUsage.invoke(cfgBuilder, AudioAttributes.USAGE_UNKNOWN)
-            val cfg = cfgClass.getMethod("build").invoke(cfgBuilder)
+            val cfg = AudioPlaybackCaptureConfiguration.Builder(mp)
+                .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
+                .addMatchingUsage(AudioAttributes.USAGE_GAME)
+                .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
+                .build()
 
             val fmt = AudioFormat.Builder()
                 .setSampleRate(44100)
@@ -150,21 +144,20 @@ class GrabService : AccessibilityService() {
             val minBuf = AudioRecord.getMinBufferSize(
                 44100, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
             )
-            val arBuilder = AudioRecord.Builder()
+            vpRecord = AudioRecord.Builder()
                 .setAudioFormat(fmt)
                 .setBufferSizeInBytes(minBuf.coerceAtLeast(65536))
-            AudioRecord.Builder::class.java.getMethod(
-                "setAudioPlaybackCaptureConfig", cfgClass
-            ).invoke(arBuilder, cfg)
-            vpRecord = arBuilder.build()
+                .setAudioPlaybackCaptureConfig(cfg)
+                .build()
             vpRecord?.startRecording()
             vpThread = Thread { captureLoop() }.apply {
                 name = "vp-capture"
                 start()
             }
             log("[声纹] 实时音频捕获已启动")
-        } catch (e: Exception) {
-            log("[声纹] 启动失败: ${e.message}（回退：直接放行）")
+        } catch (e: Throwable) {
+            log("[声纹] 启动失败: ${e.javaClass.name}: ${e.message}")
+            log("[声纹] cause: ${e.cause}")
         }
     }
 
@@ -209,7 +202,17 @@ class GrabService : AccessibilityService() {
         val fp = fingerprintOf(pcm) ?: return
         val sim = cosine(fp, base)
         val matched = sim >= MATCH_TH
-        if (matched) latestMatch = System.currentTimeMillis()
+        if (matched) {
+            latestMatch = System.currentTimeMillis()
+            val nowT = System.currentTimeMillis()
+            if (isRunning && currentMode == MainActivity.MODE_SENTRY &&
+                nowT - lastSoundTrigger > 30000
+            ) {
+                lastSoundTrigger = nowT
+                logDecision("放行", "声纹直触发(相似度%.2f)".format(sim))
+                handler.post { onNotiFired() }
+            }
+        }
         if (matched != lastMatchLog) {
             lastMatchLog = matched
             if (matched) log("[声纹] 匹配（相似度%.2f）".format(sim))
@@ -452,9 +455,9 @@ class GrabService : AccessibilityService() {
     }
 
     private fun verifyVoiceprint(): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return true
-        if (baselineFp == null) return true
-        if (vpThread?.isAlive != true) return true
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) { log("[判定] 声纹免检:系统低于Q"); return true }
+        if (baselineFp == null) { log("[判定] 声纹免检:基准未就绪"); return true }
+        if (vpThread?.isAlive != true) { log("[判定] 声纹免检:捕获线程未运行"); return true }
         return System.currentTimeMillis() - latestMatch < 2500
     }
 
