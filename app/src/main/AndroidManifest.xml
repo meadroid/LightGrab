@@ -1,18 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Android 11+ 查看全部已安装应用 -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
-
     <application
         android:allowBackup="true"
         android:label="@string/app_name"
         android:theme="@style/Theme.LightGrab">
-
         <activity
             android:name=".MainActivity"
             android:exported="true">
@@ -21,11 +18,9 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
         <activity
             android:name=".SettingsActivity"
             android:exported="false" />
-
         <service
             android:name=".GrabService"
             android:exported="false"
@@ -41,16 +36,6 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/service_config" />
         </service>
-
-        <!-- 通知哨兵：监听通知栏，目标App来新单就触发 -->
-        <service
-            android:name=".NotificationWatcher"
-            android:exported="false"
-            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
-            <intent-filter>
-                <action android:name="android.service.notification.NotificationListenerService" />
-            </intent-filter>
-        </service>
-
+        <!-- 声音哨兵已并入 GrabService（AudioPlaybackCallback），通知监听服务退役 -->
     </application>
 </manifest>
