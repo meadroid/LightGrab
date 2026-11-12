@@ -80,11 +80,8 @@ class GrabService : AccessibilityService() {
         }
     }
 
-    /** 判定该播放配置：属于目标App + 真正在响 */
+    /** 判定该播放配置属于目标App（uid 比对，API 26 兼容） */
     private fun isActiveConfigFor(cfg: AudioPlaybackConfiguration, targetPkg: String): Boolean {
-        // ① 只认"正在播放"状态（暂停/刚开通道不算）
-        if (cfg.state != AudioPlaybackConfiguration.PLAYER_STATE_STARTED) return false
-        // ② uid 比对（反射，抠不到就跳过，不崩）
         return uidMatches(cfg, targetPkg)
     }
 
