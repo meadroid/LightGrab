@@ -1,40 +1,36 @@
 <?xml version="1.0" encoding="utf-8"?>
 <menu xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto">
-
     <item
         android:id="@+id/action_target"
-        android:title="狙击目标"
+        android:title="中标人"
         app:showAsAction="never" />
-
+    <item
+        android:id="@+id/action_feature_word"
+        android:title="特征词"
+        app:showAsAction="never" />
     <item
         android:id="@+id/action_keyword"
         android:title="关键词"
         app:showAsAction="never" />
-
     <item
         android:id="@+id/action_noti_keyword"
-        android:title="通知关键词"
+        android:title="通知词"
         app:showAsAction="never" />
-
     <item
         android:id="@+id/action_ringtone"
-        android:title="铃声"
+        android:title="铃声库"
         app:showAsAction="never" />
-
     <item
         android:id="@+id/action_sentry_delay"
-        android:title="哨兵延时"
+        android:title="哨兵岗"
         app:showAsAction="never" />
-
     <item
         android:id="@+id/action_sniper_delay"
-        android:title="狙击延时"
+        android:title="狙击岗"
         app:showAsAction="never" />
-
     <item
         android:id="@+id/action_permission"
-        android:title="开启权限"
+        android:title="开权限"
         app:showAsAction="never" />
-
 </menu>
