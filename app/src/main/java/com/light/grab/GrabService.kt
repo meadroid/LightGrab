@@ -54,6 +54,7 @@ class GrabService : AccessibilityService() {
     private var watchTask: Runnable? = null
     private var lastSoundTrigger = 0L
     private var audioManager: AudioManager? = null
+    @Volatile private var lastSentinelLog = 0L
 
     @Volatile private var heartbeat = 0L
     private var watchdogTask: Runnable? = null
@@ -105,9 +106,6 @@ class GrabService : AccessibilityService() {
         val data = MainActivity.projData ?: return
         if (vpThread?.isAlive == true) return
         try {
-            val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-            mediaProjection = mpm.getMediaProjection(MainActivity.projResultCode, data)
-
             val nm = getSystemService(NotificationManager::class.java)
             nm.createNotificationChannel(
                 NotificationChannel("lightgrab_vp", "轻点声纹", NotificationManager.IMPORTANCE_LOW)
@@ -127,6 +125,9 @@ class GrabService : AccessibilityService() {
                 NOTI_ID_VP, n,
                 android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
             )
+
+            val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            mediaProjection = mpm.getMediaProjection(MainActivity.projResultCode, data)
 
             val mp = mediaProjection!!
             val cfgClass = Class.forName("android.media.projection.AudioPlaybackCaptureConfiguration")
@@ -467,16 +468,23 @@ class GrabService : AccessibilityService() {
         } catch (_: Exception) {}
     }
 
-    // ============ 声音哨兵 ============
+    // ============ 声音哨兵（模式闸门 + 日志节流） ============
     private val soundCallback = object : AudioManager.AudioPlaybackCallback() {
         override fun onPlaybackConfigChanged(configs: MutableList<AudioPlaybackConfiguration>) {
             touchHeartbeat()
+            // 模式闸门：只有哨兵模式响应声音，其他模式零日志零开销
+            if (currentMode != MainActivity.MODE_SENTRY) return
             val targetPkg = sp.getString("app_pkg", null) ?: return
             val isTargetPlaying = configs.any { uidMatches(it, targetPkg) }
             if (!isTargetPlaying) {
                 val uidAllUnknown = configs.isNotEmpty() && configs.all { uidOf(it) == null }
                 if (!uidAllUnknown) return
-                log("[声音哨兵] 降级命中(反射不可用)")
+                // 节流阀：降级命中最多3秒写一条，防刷屏
+                val nowLog = System.currentTimeMillis()
+                if (nowLog - lastSentinelLog > 3000) {
+                    lastSentinelLog = nowLog
+                    log("[声音哨兵] 降级命中(反射不可用)")
+                }
             } else {
                 log("[声音哨兵] 精确命中 $targetPkg")
             }
