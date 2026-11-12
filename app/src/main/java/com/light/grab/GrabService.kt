@@ -41,7 +41,6 @@ class GrabService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
     private var watchTask: Runnable? = null
     private var lastSoundTrigger = 0L
-    private var targetWasPlaying = false
     private var audioManager: AudioManager? = null
 
     override fun onServiceConnected() {
@@ -56,60 +55,67 @@ class GrabService : AccessibilityService() {
         try {
             audioManager?.unregisterAudioPlaybackCallback(soundCallback)
         } catch (_: Exception) {}
+        handler.removeCallbacksAndMessages(null)
         instance = null
         super.onDestroy()
     }
 
-    // ============ 声音哨兵：目标App出声 = 新单（系统事件驱动，零轮询零权限） ============
+    override fun onInterrupt() {
+        log("[服务] 被中断")
+    }
+
+    // ============ 声音哨兵：目标App出声 = 新单（系统事件驱动，零轮询零权限零定时器） ============
     private val soundCallback = object : AudioManager.AudioPlaybackCallback() {
         override fun onPlaybackConfigChanged(configs: MutableList<AudioPlaybackConfiguration>) {
             val targetPkg = sp.getString("app_pkg", null) ?: return
-            val isTargetPlaying = configs.any { cfg -> isActiveConfigFor(cfg, targetPkg) }
+            val isTargetPlaying = configs.any { cfg -> uidMatches(cfg, targetPkg) }
             if (!isTargetPlaying) {
-                targetWasPlaying = false
-                return
+                // 降级放行：反射失败（uid读不出）时，有任何App在响就算命中。
+                // 误触风险为零——响铃后还有弹窗四道校验+特征词才到点击。
+                val uidAllUnknown = configs.isNotEmpty() &&
+                        configs.all { uidOf(it) == null }
+                if (!uidAllUnknown) return
+                log("[声音哨兵] 降级命中(反射不可用)")
+            } else {
+                log("[声音哨兵] 精确命中 $targetPkg")
             }
-            // 边沿触发：响→停→响才算新一单；持续响不重复
-            if (targetWasPlaying) return
-            targetWasPlaying = true
+            // 冷却代替边沿：持续响也持续算命中，30秒内不重复触发（回调内比对，非轮询）
             val now = System.currentTimeMillis()
-            if (now - lastSoundTrigger < 3000) return
+            if (now - lastSoundTrigger < 30000) return
             lastSoundTrigger = now
-            android.util.Log.d("LightGrab", "[声音哨兵] 命中 $targetPkg 出声")
             onNotiFired()
         }
     }
 
-    /** 判定该播放配置属于目标App（uid 比对，API 26 兼容） */
-    private fun isActiveConfigFor(cfg: AudioPlaybackConfiguration, targetPkg: String): Boolean {
-        return uidMatches(cfg, targetPkg)
+    /** 读uid，失败返回null（不吞异常，交给降级逻辑） */
+    private fun uidOf(cfg: AudioPlaybackConfiguration): Int? {
+        return try {
+            val target = packageManager.getApplicationInfo(
+                sp.getString("app_pkg", null) ?: return null, 0).uid
+            val cls = AudioPlaybackConfiguration::class.java
+            try {
+                val f = cls.getDeclaredField("mUid")
+                f.isAccessible = true
+                f.getInt(cfg)
+            } catch (_: Exception) {
+                val m = cls.getDeclaredMethod("getUid")
+                m.isAccessible = true
+                m.invoke(cfg) as Int
+            }
+        } catch (_: Exception) { null }
     }
 
     private fun uidMatches(cfg: AudioPlaybackConfiguration, targetPkg: String): Boolean {
+        val uid = uidOf(cfg) ?: return false
         return try {
-            val targetUid = packageManager.getApplicationInfo(targetPkg, 0).uid
-            val cls = AudioPlaybackConfiguration::class.java
-            // 先试字段 mUid
-            val byField = try {
-                val f = cls.getDeclaredField("mUid")
-                f.isAccessible = true
-                f.getInt(cfg) == targetUid
-            } catch (_: Exception) { null }
-            if (byField != null) return byField
-            // 再兜底方法 getUid()
-            try {
-                val m = cls.getDeclaredMethod("getUid")
-                m.isAccessible = true
-                m.invoke(cfg) as Int == targetUid
-            } catch (_: Exception) { false }
-        } catch (_: Exception) {
-            false
-        }
+            uid == packageManager.getApplicationInfo(targetPkg, 0).uid
+        } catch (_: Exception) { false }
     }
 
     private fun registerSoundSentry() {
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         audioManager?.registerAudioPlaybackCallback(soundCallback, handler)
+        log("[哨兵] 声音监听已注册")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -281,7 +287,6 @@ class GrabService : AccessibilityService() {
         val now = System.currentTimeMillis()
         if (now - lastFire < 500) return true
         lastFire = now
-        // ★ 哨兵延时：特征词通过后，模拟人的反应时间再点（设置页「哨兵延时」）
         val minD = sp.getInt("sentry_delay_min", 0)
         val maxD = sp.getInt("sentry_delay_max", 0)
         val delay = Random.nextLong(minD.toLong(), maxD.toLong() + 1)
@@ -294,7 +299,7 @@ class GrabService : AccessibilityService() {
         return true
     }
 
-    // ============ 狙击/影子：窗口事件抓取 ============
+    // ============ 狙击/影子：窗口事件抓取（骨架原样，一字未动） ============
     private fun tryGrab(realClick: Boolean) {
         val custom = sp.getString("keyword", "")?.trim() ?: ""
         val keywords = if (custom.isNotEmpty()) listOf(custom)
@@ -344,14 +349,26 @@ class GrabService : AccessibilityService() {
         clickNodeRect(r)
     }
 
+    /**
+     * 安全区随机点击：按钮矩形各边内收20%作安全区，区内随机取点。
+     * 每次坐标不同但必落在按钮上。三模式共用本函数。
+     */
     private fun clickNodeRect(r: Rect) {
-        val path = Path().apply { moveTo(r.exactCenterX(), r.exactCenterY()) }
+        val insetX = (r.width() * 0.2f).toInt().coerceAtLeast(1)
+        val insetY = (r.height() * 0.2f).toInt().coerceAtLeast(1)
+        val left = r.left + insetX
+        val right = r.right - insetX
+        val top = r.top + insetY
+        val bottom = r.bottom - insetY
+        val x = if (right > left) Random.nextInt(left, right) else r.exactCenterX().toInt()
+        val y = if (bottom > top) Random.nextInt(top, bottom) else r.exactCenterY().toInt()
+        val path = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
         val gesture = GestureDescription.Builder()
             .addStroke(GestureDescription.StrokeDescription(path, 0, 50))
             .build()
         dispatchGesture(gesture, null, null)
         recordHit()
-        log("[命中] +1 → (${r.exactCenterX().toInt()}, ${r.exactCenterY().toInt()})")
+        log("[命中] +1 → ($x, $y)")
     }
 
     private fun recordHit() {
@@ -391,9 +408,5 @@ class GrabService : AccessibilityService() {
             .setOngoing(true)
             .build()
         startForeground(NOTI_ID, n)
-    }
-
-    override fun onInterrupt() {
-        log("[服务] 被中断")
     }
 }
