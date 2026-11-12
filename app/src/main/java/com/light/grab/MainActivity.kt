@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.res.ColorStateList
+import android.media.projection.MediaProjectionManager
 import android.os.Bundle
 import android.provider.Settings
 import android.text.InputType
@@ -32,6 +33,10 @@ class MainActivity : AppCompatActivity() {
             R.id.chipShadow, R.id.chipSentry,
             R.id.chipSniper, R.id.chipSilent
         )
+
+        // [声纹] 哨兵开启监听时用户授权的录屏/音频令牌，传给服务
+        @Volatile var projResultCode: Int = 0
+        @Volatile var projData: Intent? = null
     }
 
     private lateinit var sp: SharedPreferences
@@ -43,6 +48,7 @@ class MainActivity : AppCompatActivity() {
     private val logBuf = StringBuilder()
     private var running = false
     private var lastSvcLogPos = 0
+    private var pendingStart = false   // [声纹] 等授权回来再真正开启监听
     private val refresh = object : Runnable {
         override fun run() {
             refreshStatus()
@@ -68,6 +74,10 @@ class MainActivity : AppCompatActivity() {
             if (!isAccOn()) {
                 Toast.makeText(this, "请先开启无障碍权限", Toast.LENGTH_LONG).show()
                 startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            } else if (!running && GrabService.currentMode == MODE_SENTRY) {
+                // [声纹] 哨兵每次开启监听，都先要一次系统音频捕获授权（系统硬规定）
+                pendingStart = true
+                requestProjection()
             } else {
                 running = !running
                 GrabService.isRunning = running
@@ -83,8 +93,6 @@ class MainActivity : AppCompatActivity() {
         }
         running = GrabService.isRunning
         updateMainBtn()
-        // [修] 病3：服务活着时以服务的当前模式为准（它已从持久化读回），
-        // 防止App冷启动覆盖；服务不在才走本地持久化
         if (GrabService.instance != null) {
             setMode(GrabService.currentMode)
         } else {
@@ -92,6 +100,58 @@ class MainActivity : AppCompatActivity() {
         }
         log("轻点已启动")
         tvStatus.post(refresh)
+    }
+
+    // ============ [声纹] 系统音频捕获授权 ============
+    private fun requestProjection() {
+        try {
+            val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+            @Suppress("DEPRECATION")
+            startActivityForResult(mpm.createScreenCaptureIntent(), 778)
+        } catch (e: Exception) {
+            pendingStart = false
+            log("[声纹] 授权入口异常: ${e.message}（哨兵按旧逻辑运行）")
+            finishToggle()
+        }
+    }
+
+    private fun finishToggle() {
+        running = true
+        GrabService.isRunning = true
+        log("开启监听 · ${MODE_NAMES[GrabService.currentMode]}模式")
+        updateMainBtn()
+        refreshStatus()
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 777 && resultCode == RESULT_OK) {
+            val uri = data?.getParcelableExtra<android.net.Uri>(
+                android.media.RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
+            if (uri != null) {
+                sp.edit().putString("alert_uri", uri.toString()).apply()
+                Toast.makeText(this, "铃声已保存", Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+        // [声纹] 授权结果
+        if (requestCode == 778) {
+            if (resultCode == RESULT_OK && data != null) {
+                projResultCode = resultCode
+                projData = data
+                log("[声纹] ✅ 音频捕获授权成功")
+                if (pendingStart) {
+                    pendingStart = false
+                    finishToggle()
+                    GrabService.instance?.startVoiceprintIfPossible()
+                }
+            } else {
+                pendingStart = false
+                log("[声纹] ❌ 授权被拒，声纹未启用（哨兵按旧逻辑直接放行）")
+                if (pendingStart) finishToggle()
+            }
+        }
     }
 
     private fun showArsenalMenu() {
@@ -112,7 +172,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun setMode(mode: Int) {
         GrabService.currentMode = mode
-        sp.edit().putInt("mode", mode).apply()   // [修] 病3：模式切换即持久化
+        sp.edit().putInt("mode", mode).apply()
         CHIP_IDS.forEachIndexed { index, id ->
             val chip = findViewById<TextView>(id)
             if (index == mode) {
@@ -215,7 +275,6 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    /** 特征词（弹窗里必须出现的字，留空=不过滤） */
     private fun askFeatureWord() {
         val input = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_TEXT
@@ -251,7 +310,6 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    /** 铃声库：选闹钟铃声（和播放通道一致），选完真正生效 */
     private fun pickRingtone() {
         val intent = Intent(android.media.RingtoneManager.ACTION_RINGTONE_PICKER).apply {
             putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_TYPE,
@@ -267,19 +325,6 @@ class MainActivity : AppCompatActivity() {
         }
         @Suppress("DEPRECATION")
         startActivityForResult(intent, 777)
-    }
-
-    @Deprecated("Deprecated in Java")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == 777 && resultCode == RESULT_OK) {
-            val uri = data?.getParcelableExtra<android.net.Uri>(
-                android.media.RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
-            if (uri != null) {
-                sp.edit().putString("alert_uri", uri.toString()).apply()
-                Toast.makeText(this, "铃声已保存", Toast.LENGTH_SHORT).show()
-            }
-        }
     }
 
     private fun askDelay(title: String, keyMin: String, keyMax: String) {
