@@ -83,7 +83,13 @@ class MainActivity : AppCompatActivity() {
         }
         running = GrabService.isRunning
         updateMainBtn()
-        setMode(sp.getInt("mode", MODE_SHADOW))
+        // [修] 病3：服务活着时以服务的当前模式为准（它已从持久化读回），
+        // 防止App冷启动覆盖；服务不在才走本地持久化
+        if (GrabService.instance != null) {
+            setMode(GrabService.currentMode)
+        } else {
+            setMode(sp.getInt("mode", MODE_SHADOW))
+        }
         log("轻点已启动")
         tvStatus.post(refresh)
     }
@@ -106,7 +112,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun setMode(mode: Int) {
         GrabService.currentMode = mode
-        sp.edit().putInt("mode", mode).apply()
+        sp.edit().putInt("mode", mode).apply()   // [修] 病3：模式切换即持久化
         CHIP_IDS.forEachIndexed { index, id ->
             val chip = findViewById<TextView>(id)
             if (index == mode) {
