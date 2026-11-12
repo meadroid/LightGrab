@@ -19,7 +19,6 @@ import android.media.AudioRecord
 import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
-import android.media.projection.MediaProjectionManager
 import android.media.RingtoneManager
 import android.os.Build
 import android.os.Handler
@@ -38,8 +37,8 @@ class GrabService : AccessibilityService() {
         const val CHANNEL_ID = "lightgrab_fg"
         const val NOTI_ID = 1001
         const val NOTI_ID_ALERT = 1002
-        const val NOTI_ID_VP = 1003      // [声纹] mediaProjection 前台通知独立ID
-        const val MATCH_TH = 0.80f       // [声纹] 相似度阈值，误拦调低、误放调高
+        const val NOTI_ID_VP = 1003
+        const val MATCH_TH = 0.80f       // 相似度阈值，误拦调低、误放调高
         @Volatile var currentMode: Int = MainActivity.MODE_SHADOW
         @Volatile var isRunning: Boolean = false
         @Volatile var instance: GrabService? = null
@@ -72,10 +71,10 @@ class GrabService : AccessibilityService() {
         startFg()
         currentMode = sp.getInt("mode", MainActivity.MODE_SHADOW)
         checkMediaVolume()
-        buildBaseline()          // [声纹] 解码基准音
+        buildBaseline()
         registerSoundSentry()
         startWatchdog()
-        startVoiceprintIfPossible()   // [声纹] 若授权令牌已在，直接启动捕获
+        startVoiceprintIfPossible()
         log("[服务] 已连接，模式=${MainActivity.MODE_NAMES[currentMode]}（持久化读回）")
     }
 
@@ -105,7 +104,6 @@ class GrabService : AccessibilityService() {
             val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
             mediaProjection = mpm.getMediaProjection(MainActivity.projResultCode, data)
 
-            // 系统要求：捕获期间服务需带 mediaProjection 前台类型
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val nm = getSystemService(NotificationManager::class.java)
                 nm.createNotificationChannel(
@@ -127,6 +125,7 @@ class GrabService : AccessibilityService() {
             }
 
             val mp = mediaProjection!!
+            // [修] 类在 android.media.projection 包里，写全限定名
             val cfg = android.media.projection.AudioPlaybackCaptureConfiguration.Builder(mp)
                 .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
                 .addMatchingUsage(AudioAttributes.USAGE_GAME)
@@ -190,7 +189,6 @@ class GrabService : AccessibilityService() {
 
     private fun processWindow(pcm: ShortArray) {
         val base = baselineFp ?: return
-        // 静音窗口直接跳过
         var energy = 0.0
         for (s in pcm) energy += s.toDouble() * s
         val rms = Math.sqrt(energy / pcm.size)
@@ -242,7 +240,10 @@ class GrabService : AccessibilityService() {
         }
         if (frames == 0) return null
         val fp = FloatArray(bins)
-        for (i in 0 until bins) fp[i] = Math.log(1f + acc[i] / frames).toFloat()
+        // [修] Math.log 要 Double，转一下
+        for (i in 0 until bins) {
+            fp[i] = Math.log(1.0 + acc[i] / frames).toFloat()
+        }
         var norm = 0.0
         for (v in fp) norm += v.toDouble() * v
         norm = Math.sqrt(norm)
@@ -441,8 +442,8 @@ class GrabService : AccessibilityService() {
     // ============ [声纹] 判定收口：抓到目标音特征才放行 ============
     private fun verifyVoiceprint(): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return true
-        if (baselineFp == null) return true       // 没基准 → 放行（旧逻辑）
-        if (vpThread?.isAlive != true) return true // 捕获没跑起来 → 放行（旧逻辑）
+        if (baselineFp == null) return true
+        if (vpThread?.isAlive != true) return true
         return System.currentTimeMillis() - latestMatch < 2500
     }
 
