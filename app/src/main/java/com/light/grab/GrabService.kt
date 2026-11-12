@@ -39,12 +39,10 @@ class GrabService : AccessibilityService() {
     }
     private var lastFire = 0L
     private val handler = Handler(Looper.getMainLooper())
-    // ★ 哨兵待命任务句柄：全服务同一时刻最多一条待命链
     private var watchTask: Runnable? = null
-    // ★ 声音哨兵：防抖记录（上次触发时间）
     private var lastSoundTrigger = 0L
-    // ★ 声音哨兵：上一时刻目标App是否在响（响→停→响才算新一单）
     private var targetWasPlaying = false
+    private var audioManager: AudioManager? = null
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -56,27 +54,17 @@ class GrabService : AccessibilityService() {
 
     override fun onDestroy() {
         try {
-            AudioManager.unregisterAudioPlaybackCallback(this.soundCallback)
+            audioManager?.unregisterAudioPlaybackCallback(soundCallback)
         } catch (_: Exception) {}
         instance = null
         super.onDestroy()
     }
 
-    // ============ ★ 声音哨兵：目标App出声 = 新单（系统事件驱动，零轮询零权限） ============
+    // ============ 声音哨兵：目标App出声 = 新单（系统事件驱动，零轮询零权限） ============
     private val soundCallback = object : AudioManager.AudioPlaybackCallback() {
         override fun onPlaybackConfigChanged(configs: MutableList<AudioPlaybackConfiguration>) {
-            val playing = configs.any {
-                it.audioAttributes.usage == AudioAttributes.USAGE_MEDIA ||
-                it.audioAttributes.usage == AudioAttributes.USAGE_GAME
-            } && configs.any {
-                it.audioPlaybackConfiguration?.packageName == packageName
-            }
-            // 包名精确比对：只认中标人，其他App出声一律无视
             val targetPkg = sp.getString("app_pkg", null) ?: return
-            val isTargetPlaying = configs.any { cfg ->
-                cfg.audioPlaybackConfiguration != null &&
-                isActiveConfigFor(cfg, targetPkg)
-            }
+            val isTargetPlaying = configs.any { cfg -> isActiveConfigFor(cfg, targetPkg) }
             if (!isTargetPlaying) {
                 targetWasPlaying = false
                 return
@@ -85,44 +73,46 @@ class GrabService : AccessibilityService() {
             if (targetWasPlaying) return
             targetWasPlaying = true
             val now = System.currentTimeMillis()
-            if (now - lastSoundTrigger < 3000) return  // 3秒防抖
+            if (now - lastSoundTrigger < 3000) return
             lastSoundTrigger = now
             android.util.Log.d("LightGrab", "[声音哨兵] 命中 $targetPkg 出声")
             onNotiFired()
         }
     }
 
-    /** 判定该播放配置是否属于目标App且真正在响 */
+    /** 判定该播放配置：属于目标App + 真正在响 */
     private fun isActiveConfigFor(cfg: AudioPlaybackConfiguration, targetPkg: String): Boolean {
-        return try {
-            // 公开API：getPlayerInterfaceId 不含包名，用反射最稳的方式改用公开字段判断
-            // AudioPlaybackConfiguration 无公开包名API → 用 mPlayerInterfaceId 不可行，
-            // 改走 AudioPlaybackConfiguration#getId 不可行 → 最终方案：比对 uid
-            val uidField = AudioPlaybackConfiguration::class.java
-                .getDeclaredField("mPlayerInterfaceId")
-            uidField.isAccessible = true
-            true && packageUidMatches(cfg, targetPkg)
-        } catch (_: Exception) {
-            false
-        }
+        // ① 只认"正在播放"状态（暂停/刚开通道不算）
+        if (cfg.state != AudioPlaybackConfiguration.PLAYER_STATE_STARTED) return false
+        // ② uid 比对（反射，抠不到就跳过，不崩）
+        return uidMatches(cfg, targetPkg)
     }
 
-    private fun packageUidMatches(cfg: AudioPlaybackConfiguration, targetPkg: String): Boolean {
+    private fun uidMatches(cfg: AudioPlaybackConfiguration, targetPkg: String): Boolean {
         return try {
-            val pm = packageManager
-            val targetUid = pm.getApplicationInfo(targetPkg, 0).uid
-            val uidField = AudioPlaybackConfiguration::class.java
-                .getDeclaredField("mUid")
-            uidField.isAccessible = true
-            uidField.getInt(cfg) == targetUid
+            val targetUid = packageManager.getApplicationInfo(targetPkg, 0).uid
+            val cls = AudioPlaybackConfiguration::class.java
+            // 先试字段 mUid
+            val byField = try {
+                val f = cls.getDeclaredField("mUid")
+                f.isAccessible = true
+                f.getInt(cfg) == targetUid
+            } catch (_: Exception) { null }
+            if (byField != null) return byField
+            // 再兜底方法 getUid()
+            try {
+                val m = cls.getDeclaredMethod("getUid")
+                m.isAccessible = true
+                m.invoke(cfg) as Int == targetUid
+            } catch (_: Exception) { false }
         } catch (_: Exception) {
             false
         }
     }
 
     private fun registerSoundSentry() {
-        val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        am.registerAudioPlaybackCallback(soundCallback, handler)
+        audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        audioManager?.registerAudioPlaybackCallback(soundCallback, handler)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -199,7 +189,7 @@ class GrabService : AccessibilityService() {
         scheduleWatchTick(ticksLeft - 1, 200)
     }
 
-    /** ★ 响铃：播铃声库选的铃声（没选过回落默认闹钟声），锁死闹钟通道，音量拉满，播两遍 */
+    /** 响铃：播铃声库选的铃声（没选过回落默认闹钟声），锁死闹钟通道，音量拉满，播两遍 */
     private fun playAlert() {
         val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val old = am.getStreamVolume(AudioManager.STREAM_ALARM)
@@ -237,11 +227,7 @@ class GrabService : AccessibilityService() {
         }, 5000)
     }
 
-    /**
-     * ★ 只点「可见的真二级弹窗」。四道校验缺一不可：
-     *   ① 文本精确等于关键词  ② isVisibleToUser  ③ 区域合法
-     *   ④ 特征词门卫：按钮上方弹窗区域必须出现特征词（留空=跳过）
-     */
+    /** 只点「可见的真二级弹窗」。四道校验缺一不可 */
     private fun tryClickConfirm(): Boolean {
         val custom = sp.getString("confirm_keyword", "")?.trim() ?: ""
         val kw = if (custom.isNotEmpty()) custom else "确认抢单"
