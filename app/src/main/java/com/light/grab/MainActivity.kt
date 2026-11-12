@@ -22,13 +22,11 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 
 class MainActivity : AppCompatActivity() {
-
     companion object {
         const val MODE_SHADOW = 0
         const val MODE_SENTRY = 1
         const val MODE_SNIPER = 2
         const val MODE_SILENT = 3
-
         val MODE_NAMES = listOf("影子", "哨兵", "狙击", "静默")
         val CHIP_IDS = listOf(
             R.id.chipShadow, R.id.chipSentry,
@@ -44,8 +42,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnArsenal: TextView
     private val logBuf = StringBuilder()
     private var running = false
-    private var lastSvcLogPos = 0  // 已读到的服务日志位置
-
+    private var lastSvcLogPos = 0
     private val refresh = object : Runnable {
         override fun run() {
             refreshStatus()
@@ -57,21 +54,16 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-
         sp = getSharedPreferences("lightdot", Context.MODE_PRIVATE)
         tvLog = findViewById(R.id.tvLog)
         tvStatus = findViewById(R.id.tvStatus)
         logScroll = findViewById(R.id.logScroll)
         btnMain = findViewById(R.id.btnMain)
         btnArsenal = findViewById(R.id.btnArsenal)
-
         CHIP_IDS.forEachIndexed { index, id ->
             findViewById<TextView>(id).setOnClickListener { setMode(index) }
         }
-
-        // 齿轮：从齿轮位置弹出武器库菜单
         btnArsenal.setOnClickListener { showArsenalMenu() }
-
         btnMain.setOnClickListener {
             if (!isAccOn()) {
                 Toast.makeText(this, "请先开启无障碍权限", Toast.LENGTH_LONG).show()
@@ -84,23 +76,18 @@ class MainActivity : AppCompatActivity() {
                 refreshStatus()
             }
         }
-
         findViewById<TextView>(R.id.btnCopyLog).setOnClickListener {
             val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             cm.setPrimaryClip(ClipData.newPlainText("log", tvLog.text))
             Toast.makeText(this, "日志已复制", Toast.LENGTH_SHORT).show()
         }
-
-        // 开机同步真实运行状态
         running = GrabService.isRunning
         updateMainBtn()
-
         setMode(sp.getInt("mode", MODE_SHADOW))
         log("轻点已启动")
         tvStatus.post(refresh)
     }
 
-    /** 从齿轮位置弹出武器库菜单 */
     private fun showArsenalMenu() {
         val popup = PopupMenu(this, btnArsenal)
         popup.menuInflater.inflate(R.menu.menu_main, popup.menu)
@@ -108,7 +95,6 @@ class MainActivity : AppCompatActivity() {
         popup.show()
     }
 
-    /** 监听按钮：运行=绿，停止=灰，文字跟随状态 */
     private fun updateMainBtn() {
         btnMain.text = if (running) "停止监听" else "开启监听"
         val bg = if (running) R.color.mint else R.color.grayChip
@@ -131,7 +117,6 @@ class MainActivity : AppCompatActivity() {
                 chip.setTextColor(ContextCompat.getColor(this, R.color.grayText))
             }
         }
-        // ★ 前台通知联动：切胶囊，通知栏模式文字跟着变
         GrabService.instance?.onModeChanged()
         refreshStatus()
         log("模式切换 → ${MODE_NAMES[mode]}")
@@ -148,7 +133,6 @@ class MainActivity : AppCompatActivity() {
             java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.CHINA)
                 .format(java.util.Date(last))
         else "无"
-
         val line1 = if (running && isAccOn()) "♟️ 模式：${modeName} 运行中"
                      else "♟️ 模式：${modeName} 待启动"
         val line2 = "🕐 今日：命中 $today 发  $lastStr"
@@ -156,7 +140,6 @@ class MainActivity : AppCompatActivity() {
         tvStatus.text = "$line1\n$line2\n$line3"
     }
 
-    /** 把服务写进 SP 的日志同步到界面日志区 */
     private fun syncServiceLogs() {
         val svcLogs = sp.getString("svc_logs", "") ?: ""
         if (svcLogs.length <= lastSvcLogPos) return
@@ -188,15 +171,15 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // PopupMenu 的菜单点击走这里处理
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return when (item.itemId) {
             R.id.action_target -> { askApp(); true }
+            R.id.action_feature_word -> { askFeatureWord(); true }
             R.id.action_keyword -> { askKeyword(); true }
             R.id.action_noti_keyword -> { askNotiKeyword(); true }
             R.id.action_ringtone -> { pickRingtone(); true }
-            R.id.action_sentry_delay -> { askDelay("哨兵延时（最低~最高）", "sentry_delay_min", "sentry_delay_max"); true }
-            R.id.action_sniper_delay -> { askDelay("狙击延时（最低~最高）", "sniper_delay_min", "sniper_delay_max"); true }
+            R.id.action_sentry_delay -> { askDelay("哨兵岗（延时最低~最高）", "sentry_delay_min", "sentry_delay_max"); true }
+            R.id.action_sniper_delay -> { askDelay("狙击岗（延时最低~最高）", "sniper_delay_min", "sniper_delay_max"); true }
             R.id.action_permission -> {
                 startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); true
             }
@@ -204,7 +187,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 三级：选择目标应用 */
     private fun askApp() {
         val pm = packageManager
         val apps = pm.getInstalledPackages(0)
@@ -214,10 +196,9 @@ class MainActivity : AppCompatActivity() {
                 name to it.packageName
             }
             .sortedBy { it.first }
-
         val names = apps.map { it.first }.toTypedArray()
         AlertDialog.Builder(this)
-            .setTitle("选择目标应用")
+            .setTitle("选择中标人（目标应用）")
             .setItems(names) { _, which ->
                 sp.edit()
                     .putString("app_pkg", apps[which].second)
@@ -229,7 +210,25 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    /** 三级：关键词 */
+    /** 特征词（弹窗里必须出现的字，留空=不过滤） */
+    private fun askFeatureWord() {
+        val input = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_TEXT
+            setText(sp.getString("feature_word", ""))
+            setSingleLine(true)
+            hint = "如：必达单 / 立即上门单，留空=不过滤"
+        }
+        AlertDialog.Builder(this)
+            .setTitle("特征词（弹窗里必须出现的字，多个用逗号隔开）")
+            .setView(input)
+            .setPositiveButton("保存") { _, _ ->
+                sp.edit().putString("feature_word", input.text.toString().trim()).apply()
+                Toast.makeText(this, "已保存，留空=不过滤弹窗", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
     private fun askKeyword() {
         val input = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_TEXT
@@ -247,7 +246,6 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    /** 三级：通知关键词（哨兵过滤通知内容，和狙击关键词分开） */
     private fun askNotiKeyword() {
         val input = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_TEXT
@@ -255,7 +253,7 @@ class MainActivity : AppCompatActivity() {
             setSingleLine(true)
         }
         AlertDialog.Builder(this)
-            .setTitle("通知关键词（新单通知里必须出现的字，如：新单）")
+            .setTitle("通知词（新单通知里必须出现的字，如：新单）")
             .setView(input)
             .setPositiveButton("保存") { _, _ ->
                 sp.edit().putString("noti_keyword", input.text.toString().trim()).apply()
@@ -265,17 +263,18 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    /** 三级：弹系统选铃声窗口，选完存URI */
+    /** ★ 铃声库：选闹钟铃声（和播放通道一致），选完存URI，真正生效 */
     private fun pickRingtone() {
         val intent = Intent(android.media.RingtoneManager.ACTION_RINGTONE_PICKER).apply {
             putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_TYPE,
-                     android.media.RingtoneManager.TYPE_NOTIFICATION)
-            putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_TITLE, "选哨兵铃声")
+                     android.media.RingtoneManager.TYPE_ALARM)
+            putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_TITLE, "选铃声库")
             putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_SHOW_SILENT, false)
-            // 回显当前选中的
             sp.getString("alert_uri", null)?.let {
-                putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_EXISTING_URI,
-                         android.net.Uri.parse(it))
+                try {
+                    putExtra(android.media.RingtoneManager.EXTRA_RINGTONE_EXISTING_URI,
+                             android.net.Uri.parse(it))
+                } catch (_: Exception) { }
             }
         }
         @Suppress("DEPRECATION")
@@ -286,6 +285,7 @@ class MainActivity : AppCompatActivity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == 777 && resultCode == RESULT_OK) {
+            // ★ 判空：用户取消/返回时 data 为 null，直接跳过
             val uri = data?.getParcelableExtra<android.net.Uri>(
                 android.media.RingtoneManager.EXTRA_RINGTONE_PICKED_URI)
             if (uri != null) {
@@ -295,7 +295,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 三级：延时区间 */
     private fun askDelay(title: String, keyMin: String, keyMax: String) {
         val minInput = EditText(this).apply {
             inputType = InputType.TYPE_CLASS_NUMBER
