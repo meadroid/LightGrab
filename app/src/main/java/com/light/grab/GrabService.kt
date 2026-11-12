@@ -13,6 +13,7 @@ import android.graphics.Path
 import android.graphics.Rect
 import android.media.AudioAttributes
 import android.media.AudioManager
+import android.media.AudioPlaybackConfiguration
 import android.media.RingtoneManager
 import android.os.Build
 import android.os.Handler
@@ -40,17 +41,88 @@ class GrabService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
     // ★ 哨兵待命任务句柄：全服务同一时刻最多一条待命链
     private var watchTask: Runnable? = null
+    // ★ 声音哨兵：防抖记录（上次触发时间）
+    private var lastSoundTrigger = 0L
+    // ★ 声音哨兵：上一时刻目标App是否在响（响→停→响才算新一单）
+    private var targetWasPlaying = false
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
         startFg()
+        registerSoundSentry()
         log("[服务] 已连接，模式=${MainActivity.MODE_NAMES[currentMode]}")
     }
 
     override fun onDestroy() {
+        try {
+            AudioManager.unregisterAudioPlaybackCallback(this.soundCallback)
+        } catch (_: Exception) {}
         instance = null
         super.onDestroy()
+    }
+
+    // ============ ★ 声音哨兵：目标App出声 = 新单（系统事件驱动，零轮询零权限） ============
+    private val soundCallback = object : AudioManager.AudioPlaybackCallback() {
+        override fun onPlaybackConfigChanged(configs: MutableList<AudioPlaybackConfiguration>) {
+            val playing = configs.any {
+                it.audioAttributes.usage == AudioAttributes.USAGE_MEDIA ||
+                it.audioAttributes.usage == AudioAttributes.USAGE_GAME
+            } && configs.any {
+                it.audioPlaybackConfiguration?.packageName == packageName
+            }
+            // 包名精确比对：只认中标人，其他App出声一律无视
+            val targetPkg = sp.getString("app_pkg", null) ?: return
+            val isTargetPlaying = configs.any { cfg ->
+                cfg.audioPlaybackConfiguration != null &&
+                isActiveConfigFor(cfg, targetPkg)
+            }
+            if (!isTargetPlaying) {
+                targetWasPlaying = false
+                return
+            }
+            // 边沿触发：响→停→响才算新一单；持续响不重复
+            if (targetWasPlaying) return
+            targetWasPlaying = true
+            val now = System.currentTimeMillis()
+            if (now - lastSoundTrigger < 3000) return  // 3秒防抖
+            lastSoundTrigger = now
+            android.util.Log.d("LightGrab", "[声音哨兵] 命中 $targetPkg 出声")
+            onNotiFired()
+        }
+    }
+
+    /** 判定该播放配置是否属于目标App且真正在响 */
+    private fun isActiveConfigFor(cfg: AudioPlaybackConfiguration, targetPkg: String): Boolean {
+        return try {
+            // 公开API：getPlayerInterfaceId 不含包名，用反射最稳的方式改用公开字段判断
+            // AudioPlaybackConfiguration 无公开包名API → 用 mPlayerInterfaceId 不可行，
+            // 改走 AudioPlaybackConfiguration#getId 不可行 → 最终方案：比对 uid
+            val uidField = AudioPlaybackConfiguration::class.java
+                .getDeclaredField("mPlayerInterfaceId")
+            uidField.isAccessible = true
+            true && packageUidMatches(cfg, targetPkg)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun packageUidMatches(cfg: AudioPlaybackConfiguration, targetPkg: String): Boolean {
+        return try {
+            val pm = packageManager
+            val targetUid = pm.getApplicationInfo(targetPkg, 0).uid
+            val uidField = AudioPlaybackConfiguration::class.java
+                .getDeclaredField("mUid")
+            uidField.isAccessible = true
+            uidField.getInt(cfg) == targetUid
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun registerSoundSentry() {
+        val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        am.registerAudioPlaybackCallback(soundCallback, handler)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -66,7 +138,7 @@ class GrabService : AccessibilityService() {
         if (targetPkg != null && pkg != targetPkg) return
         when (currentMode) {
             MainActivity.MODE_SHADOW -> tryGrab(realClick = false)
-            MainActivity.MODE_SENTRY -> { /* 哨兵只由通知驱动 */ }
+            MainActivity.MODE_SENTRY -> { /* 哨兵由声音驱动 */ }
             MainActivity.MODE_SNIPER -> if (isRunning) tryGrab(realClick = true)
             MainActivity.MODE_SILENT -> { /* 静默：休眠 */ }
         }
@@ -91,14 +163,14 @@ class GrabService : AccessibilityService() {
         nm.notify(NOTI_ID, n)
     }
 
-    // ============ 哨兵：通知来了 → 响铃 → 待命 → 点真二级弹窗 ============
+    // ============ 哨兵：声音触发 → 响铃 → 待命 → 点真二级弹窗 ============
     fun onNotiFired() {
         if (!isRunning) return
         if (currentMode != MainActivity.MODE_SENTRY) return
         cancelWatch()
         playAlert()
         val watchSec = sp.getInt("sentry_watch_sec", 15)
-        log("[哨兵] 通知触发，进入待命${watchSec}秒，等待你点「抢单」")
+        log("[哨兵] 声音触发，进入待命${watchSec}秒，等待你点「抢单」")
         val ticks = watchSec * 1000 / 200
         scheduleWatchTick(ticks, 200)
     }
@@ -127,8 +199,7 @@ class GrabService : AccessibilityService() {
         scheduleWatchTick(ticksLeft - 1, 200)
     }
 
-    /** ★ 修好的响铃：播用户在铃声库选的铃声（没选过回落默认闹钟声），
-     *  通道锁死闹钟 + 音量拉满，每声2秒播两遍（无震动） */
+    /** ★ 响铃：播铃声库选的铃声（没选过回落默认闹钟声），锁死闹钟通道，音量拉满，播两遍 */
     private fun playAlert() {
         val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val old = am.getStreamVolume(AudioManager.STREAM_ALARM)
@@ -137,7 +208,6 @@ class GrabService : AccessibilityService() {
             am.getStreamMaxVolume(AudioManager.STREAM_ALARM),
             0
         )
-        // 铃声源：用户选的优先，没选过回落系统默认闹钟声
         val uri = sp.getString("alert_uri", null)?.let {
             try { android.net.Uri.parse(it) } catch (_: Exception) { null }
         } ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
@@ -147,7 +217,7 @@ class GrabService : AccessibilityService() {
                     val r = RingtoneManager.getRingtone(this, uri)
                     if (r != null) {
                         r.audioAttributes = AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_ALARM)   // 锁死闹钟通道
+                            .setUsage(AudioAttributes.USAGE_ALARM)
                             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
                             .build()
                         r.play()
@@ -168,9 +238,9 @@ class GrabService : AccessibilityService() {
     }
 
     /**
-     * ★ 只点「可见的真二级弹窗」上的「确认抢单」。四道校验缺一不可：
+     * ★ 只点「可见的真二级弹窗」。四道校验缺一不可：
      *   ① 文本精确等于关键词  ② isVisibleToUser  ③ 区域合法
-     *   ④ 特征词校验：按钮上方弹窗区域必须出现特征词（留空=跳过此道）
+     *   ④ 特征词门卫：按钮上方弹窗区域必须出现特征词（留空=跳过）
      */
     private fun tryClickConfirm(): Boolean {
         val custom = sp.getString("confirm_keyword", "")?.trim() ?: ""
@@ -181,8 +251,8 @@ class GrabService : AccessibilityService() {
         if (candidates != null) {
             for (c in candidates) {
                 val txt = c.text?.toString() ?: continue
-                if (txt != kw) continue                 // ① 精确匹配
-                if (!c.isVisibleToUser) continue        // ② 只认看得见的
+                if (txt != kw) continue
+                if (!c.isVisibleToUser) continue
                 val r = Rect()
                 c.getBoundsInScreen(r)
                 if (r.isEmpty || r.top < 0 ||
@@ -198,7 +268,6 @@ class GrabService : AccessibilityService() {
         val btnRect = Rect()
         target.getBoundsInScreen(btnRect)
         target.recycle()
-        // ④ 特征词门卫：只查弹窗区域（按钮上方240dp内），主界面不参与
         val feature = sp.getString("feature_word", "")?.trim() ?: ""
         if (feature.isNotEmpty()) {
             val words = feature.split(",", "，").map { it.trim() }.filter { it.isNotEmpty() }
@@ -227,7 +296,7 @@ class GrabService : AccessibilityService() {
         }
         root.recycle()
         val now = System.currentTimeMillis()
-        if (now - lastFire < 500) return true  // 刚点过防重复
+        if (now - lastFire < 500) return true
         lastFire = now
         log("[哨兵] 弹窗校验通过「$kw」→ 立即点击")
         clickNodeRect(btnRect)
