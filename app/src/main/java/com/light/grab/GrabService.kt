@@ -9,38 +9,48 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.graphics.Bitmap
 import android.graphics.Path
 import android.graphics.Rect
 import android.media.AudioAttributes
-import android.media.AudioFormat
 import android.media.AudioManager
-import android.media.AudioPlaybackConfiguration
-import android.media.AudioRecord
-import android.media.MediaCodec
-import android.media.MediaExtractor
-import android.media.MediaFormat
 import android.media.RingtoneManager
-import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import kotlin.math.sqrt
 import kotlin.random.Random
+
+/** 日志池：每模式独立，300条滚动，攒批落盘 */
+class LogPool(private val sp: SharedPreferences, private val key: String) {
+    private val lines = ArrayDeque<String>()
+    @Volatile private var dirty = false
+
+    @Synchronized fun add(msg: String) {
+        val t = SimpleDateFormat("HH:mm:ss", Locale.CHINA).format(Date())
+        lines.addLast("$t  $msg")
+        while (lines.size > 300) lines.removeFirst()
+        dirty = true
+    }
+
+    @Synchronized fun text(): String = lines.joinToString("\n")
+
+    fun flushIfDirty() {
+        if (!dirty) return
+        dirty = false
+        try { sp.edit().putString(key, text()).apply() } catch (_: Exception) {}
+    }
+}
 
 class GrabService : AccessibilityService() {
 
     companion object {
         const val CHANNEL_ID = "lightgrab_fg"
         const val NOTI_ID = 1001
-        const val NOTI_ID_ALERT = 1002
-        const val NOTI_ID_VP = 1003
-        const val MATCH_TH = 0.80f
         @Volatile var currentMode: Int = MainActivity.MODE_SHADOW
         @Volatile var isRunning: Boolean = false
         @Volatile var instance: GrabService? = null
@@ -49,46 +59,31 @@ class GrabService : AccessibilityService() {
     private val sp: SharedPreferences by lazy {
         getSharedPreferences("lightdot", Context.MODE_PRIVATE)
     }
-    private var lastFire = 0L
     private val handler = Handler(Looper.getMainLooper())
-    private var watchTask: Runnable? = null
-    private var lastSoundTrigger = 0L
-    private var audioManager: AudioManager? = null
-    @Volatile private var lastSentinelLog = 0L
+    private val pools = Array(4) { LogPool(sp, "logs_m$it") }
+    private val flushTask = Runnable { pools.forEach { it.flushIfDirty() } }
 
-    @Volatile private var heartbeat = 0L
-    private var watchdogTask: Runnable? = null
-    private var watchdogRestarts = 0
+    private var lastFire = 0L        // 弹窗确认冷却
+    private var lastRing = 0L        // 响铃冷却
+    @Volatile private var newSeen = false   // 角标去重：同一批新单只叫一次
+    @Volatile private var probeBusy = false // 探针串行闸门
 
-    // ============ [声纹] ============
-    private var mediaProjection: android.media.projection.MediaProjection? = null
-    private var vpRecord: AudioRecord? = null
-    private var vpThread: Thread? = null
-    private var baselineFp: FloatArray? = null
-    @Volatile private var latestMatch = 0L
-    @Volatile private var lastMatchLog = false
-
+    // ============ 生命周期 ============
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
         try {
             startFg()
             currentMode = sp.getInt("mode", MainActivity.MODE_SHADOW)
-            log("[服务] 已连接 v-direct-0513，模式=${MainActivity.MODE_NAMES[currentMode]}")
+            log("[服务] 已连接 · 精简版，模式=${MainActivity.MODE_NAMES[currentMode]}")
         } catch (e: Exception) {
-            log("[服务] 基础启动异常: ${e.message}")
+            log("[服务] 启动异常: ${e.message}")
         }
-        try { checkMediaVolume() } catch (e: Exception) { log("[自检] 异常: ${e.message}") }
-        try { buildBaseline() } catch (e: Exception) { log("[声纹] 基准异常: ${e.message}") }
-        try { registerSoundSentry() } catch (e: Exception) { log("[哨兵] 注册异常: ${e.message}") }
-        try { startWatchdog() } catch (e: Exception) { log("[看门狗] 异常: ${e.message}") }
-        try { startVoiceprintIfPossible() } catch (e: Exception) { log("[声纹] 启动异常: ${e.message}") }
     }
 
     override fun onDestroy() {
-        try { audioManager?.unregisterAudioPlaybackCallback(soundCallback) } catch (_: Exception) {}
-        stopVoiceprint()
         handler.removeCallbacksAndMessages(null)
+        pools.forEach { it.flushIfDirty() }
         instance = null
         super.onDestroy()
     }
@@ -97,712 +92,261 @@ class GrabService : AccessibilityService() {
         log("[服务] 被中断")
     }
 
-    // ============ [声纹] 反射构建音频捕获 AudioRecord（编译期不依赖 AudioPlaybackCaptureConfiguration） ============
-    private fun buildCaptureRecord(mp: android.media.projection.MediaProjection, fmt: AudioFormat, bufSize: Int): AudioRecord {
-        val cfgBuilderCls = Class.forName("android.media.projection.AudioPlaybackCaptureConfiguration\$Builder")
-        val cfgBuilder = cfgBuilderCls.getConstructor(android.media.projection.MediaProjection::class.java)
-            .newInstance(mp)
-        for (usage in intArrayOf(
-            AudioAttributes.USAGE_MEDIA,
-            AudioAttributes.USAGE_GAME,
-            AudioAttributes.USAGE_UNKNOWN
-        )) {
-            cfgBuilderCls.getMethod("addMatchingUsage", Int::class.javaPrimitiveType)
-                .invoke(cfgBuilder, usage)
-        }
-        val cfg = cfgBuilderCls.getMethod("build").invoke(cfgBuilder)
-
-        val arbCls = AudioRecord.Builder::class.java
-        val arb = arbCls.getDeclaredConstructor().newInstance()
-        arbCls.getMethod("setAudioFormat", AudioFormat::class.java).invoke(arb, fmt)
-        arbCls.getMethod("setBufferSizeInBytes", Int::class.javaPrimitiveType)
-            .invoke(arb, bufSize)
-        val cfgCls = Class.forName("android.media.projection.AudioPlaybackCaptureConfiguration")
-        arbCls.getMethod("setAudioPlaybackCaptureConfig", cfgCls).invoke(arb, cfg)
-        return arb.build()
-    }
-
-    // ============ [声纹] 启动音频捕获 ============
-    fun startVoiceprintIfPossible() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            log("[声纹] 系统低于安卓10，不支持捕获（自动放行模式）")
-            return
-        }
-        val data = MainActivity.projData ?: return
-        if (vpThread?.isAlive == true) return
-        try {
-            val nm = getSystemService(NotificationManager::class.java)
-            nm.createNotificationChannel(
-                NotificationChannel("lightgrab_vp", "轻点声纹", NotificationManager.IMPORTANCE_LOW)
-            )
-            val pi = PendingIntent.getActivity(
-                this, 1, Intent(this, MainActivity::class.java),
-                PendingIntent.FLAG_IMMUTABLE
-            )
-            val n: Notification = Notification.Builder(this, "lightgrab_vp")
-                .setContentTitle("轻点声纹监听中")
-                .setContentText("正在比对目标App提示音")
-                .setSmallIcon(android.R.drawable.ic_dialog_info)
-                .setContentIntent(pi)
-                .setOngoing(true)
-                .build()
-            startForeground(
-                NOTI_ID_VP, n,
-                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-            )
-
-            val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-            mediaProjection = mpm.getMediaProjection(MainActivity.projResultCode, data)
-
-            val mp = mediaProjection!!
-            val fmt = AudioFormat.Builder()
-                .setSampleRate(44100)
-                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
-                .build()
-            val minBuf = AudioRecord.getMinBufferSize(
-                44100, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
-            )
-            vpRecord = buildCaptureRecord(mp, fmt, minBuf.coerceAtLeast(65536))
-            vpRecord?.startRecording()
-            vpThread = Thread { captureLoop() }.apply {
-                name = "vp-capture"
-                start()
-            }
-            log("[声纹] 实时音频捕获已启动")
-        } catch (e: Throwable) {
-            log("[声纹] 启动失败: ${e.javaClass.name}: ${e.message}")
-            log("[声纹] cause: ${e.cause}")
-        }
-    }
-
-    private fun stopVoiceprint() {
-        try { vpRecord?.stop() } catch (_: Exception) {}
-        try { vpRecord?.release() } catch (_: Exception) {}
-        vpRecord = null
-        vpThread = null
-        try { mediaProjection?.stop() } catch (_: Exception) {}
-        mediaProjection = null
-    }
-
-    private fun captureLoop() {
-        val win = 4096
-        val buf = ShortArray(1024)
-        var acc = ShortArray(win)
-        var accLen = 0
-        val rec = vpRecord ?: return
-        while (vpThread != null && rec.state == AudioRecord.STATE_INITIALIZED) {
-            val n = try { rec.read(buf, 0, buf.size) } catch (_: Exception) { -1 }
-            if (n <= 0) { sleepMs(10); continue }
-            var i = 0
-            while (i < n) {
-                val take = minOf(n - i, win - accLen)
-                System.arraycopy(buf, i, acc, accLen, take)
-                accLen += take
-                i += take
-                if (accLen == win) {
-                    processWindow(acc)
-                    acc = ShortArray(win)
-                    accLen = 0
-                }
-            }
-        }
-    }
-
-    private fun processWindow(pcm: ShortArray) {
-        val base = baselineFp ?: return
-        var energy = 0.0
-        for (s in pcm) energy += s.toDouble() * s
-        if (sqrt(energy / pcm.size) < 150.0) return
-        val fp = fingerprintOf(pcm) ?: return
-        val sim = cosine(fp, base)
-        val matched = sim >= MATCH_TH
-        if (matched) {
-            latestMatch = System.currentTimeMillis()
-            val nowT = System.currentTimeMillis()
-            if (isRunning && currentMode == MainActivity.MODE_SENTRY &&
-                nowT - lastSoundTrigger > 30000
-            ) {
-                lastSoundTrigger = nowT
-                logDecision("放行", "声纹直触发(相似度%.2f)".format(sim))
-                handler.post { onNotiFired() }
-            }
-        }
-        if (matched != lastMatchLog) {
-            lastMatchLog = matched
-            if (matched) log("[声纹] 匹配（相似度%.2f）".format(sim))
-            else log("[声纹] 不匹配（相似度%.2f），拦截".format(sim))
-        }
-    }
-
-    // ============ [声纹] 指纹：分帧FFT幅度谱 → log → 归一化 ============
-    private fun fingerprintOf(pcm: ShortArray): FloatArray? {
-        val n = 4096
-        if (pcm.size < n) return null
-        val bins = n / 2
-        val acc = FloatArray(bins)
-        var frames = 0
-        val re = FloatArray(n)
-        val im = FloatArray(n)
-        val hann = FloatArray(n)
-        for (i in 0 until n) {
-            hann[i] = (0.5 * (1 - Math.cos(2.0 * Math.PI * i / (n - 1)))).toFloat()
-        }
-        var off = 0
-        while (off + n <= pcm.size) {
-            var e = 0.0
-            for (i in 0 until n) {
-                val v = pcm[off + i].toDouble()
-                e += v * v
-            }
-            if (sqrt(e / n) > 150.0) {
-                for (i in 0 until n) {
-                    re[i] = pcm[off + i] * hann[i]
-                    im[i] = 0f
-                }
-                fft(re, im)
-                for (i in 0 until bins) {
-                    acc[i] += sqrt(re[i].toDouble() * re[i] + im[i].toDouble() * im[i]).toFloat()
-                }
-                frames++
-            }
-            off += n / 2
-        }
-        if (frames == 0) return null
-        val fp = FloatArray(bins)
-        for (i in 0 until bins) {
-            fp[i] = Math.log(1.0 + acc[i] / frames).toFloat()
-        }
-        var norm = 0.0
-        for (v in fp) norm += v.toDouble() * v
-        norm = sqrt(norm)
-        if (norm < 1e-6) return null
-        for (i in 0 until bins) fp[i] = (fp[i] / norm).toFloat()
-        return fp
-    }
-
-    private fun cosine(a: FloatArray, b: FloatArray): Float {
-        if (a.size != b.size) return 0f
-        var dot = 0.0
-        for (i in a.indices) dot += a[i].toDouble() * b[i]
-        return dot.toFloat()
-    }
-
-    private fun fft(re: FloatArray, im: FloatArray) {
-        val n = re.size
-        var j = 0
-        for (i in 1 until n) {
-            var bit = n shr 1
-            while (j and bit != 0) { j = j xor bit; bit = bit shr 1 }
-            j = j or bit
-            if (i < j) {
-                re[i] = re[j].also { re[j] = re[i] }
-                im[i] = im[j].also { im[j] = im[i] }
-            }
-        }
-        var len = 2
-        while (len <= n) {
-            val ang = -2.0 * Math.PI / len
-            val wr = Math.cos(ang).toFloat()
-            val wi = Math.sin(ang).toFloat()
-            var i = 0
-            while (i < n) {
-                var cr = 1f
-                var ci = 0f
-                val half = len / 2
-                for (k in 0 until half) {
-                    val ur = re[i + k]
-                    val ui = im[i + k]
-                    val xr = re[i + k + half]
-                    val xi = im[i + k + half]
-                    val vr = xr * cr - xi * ci
-                    val vi = xr * ci + xi * cr
-                    re[i + k] = ur + vr
-                    im[i + k] = ui + vi
-                    re[i + k + half] = ur - vr
-                    im[i + k + half] = ui - vi
-                    val ncr = cr * wr - ci * wi
-                    ci = cr * wi + ci * wr
-                    cr = ncr
-                }
-                i += len
-            }
-            len = len shl 1
-        }
-    }
-
-    private fun buildBaseline() {
-        try {
-            val tmp = File(cacheDir, "baseline_tmp.mp3")
-            resources.openRawResource(R.raw.baseline).use { input ->
-                tmp.outputStream().use { input.copyTo(it) }
-            }
-            val extractor = MediaExtractor()
-            extractor.setDataSource(tmp.absolutePath)
-            var trackIdx = -1
-            var format: MediaFormat? = null
-            for (i in 0 until extractor.trackCount) {
-                val f = extractor.getTrackFormat(i)
-                if (f.getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true) {
-                    trackIdx = i
-                    format = f
-                    break
-                }
-            }
-            if (trackIdx < 0 || format == null) {
-                log("[声纹] 基准音里找不到音轨（放行模式）")
-                return
-            }
-            extractor.selectTrack(trackIdx)
-            val mime = format!!.getString(MediaFormat.KEY_MIME)!!
-            val codec = MediaCodec.createDecoderByType(mime)
-            codec.configure(format, null, null, 0)
-            codec.start()
-            val pcm = mutableListOf<Short>()
-            val info = MediaCodec.BufferInfo()
-            var eos = false
-            var spins = 0
-            while (pcm.size < 44100 * 4 && !eos && spins < 5000) {
-                spins++
-                if (!eos) {
-                    val inBuf = codec.dequeueInputBuffer(10_000)
-                    if (inBuf >= 0) {
-                        val ib = codec.getInputBuffer(inBuf)!!
-                        val sz = extractor.readSampleData(ib, 0)
-                        if (sz < 0) {
-                            codec.queueInputBuffer(inBuf, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                            eos = true
-                        } else {
-                            codec.queueInputBuffer(inBuf, 0, sz, extractor.sampleTime, 0)
-                            extractor.advance()
-                        }
-                    }
-                }
-                val outBuf = codec.dequeueOutputBuffer(info, 10_000)
-                if (outBuf >= 0) {
-                    val ob = codec.getOutputBuffer(outBuf)!!
-                    ob.position(info.offset)
-                    ob.limit(info.offset + info.size)
-                    while (ob.remaining() >= 2) pcm.add(ob.short)
-                    codec.releaseOutputBuffer(outBuf, false)
-                }
-            }
-            try { codec.stop() } catch (_: Exception) {}
-            try { codec.release() } catch (_: Exception) {}
-            try { extractor.release() } catch (_: Exception) {}
-            tmp.delete()
-            if (pcm.size < 4096) {
-                log("[声纹] 基准音太短（放行模式）")
-                return
-            }
-            val arr = ShortArray(pcm.size)
-            for (i in arr.indices) arr[i] = pcm[i]
-            baselineFp = fingerprintOf(arr)
-            if (baselineFp != null) log("[声纹] 基准指纹就绪（${pcm.size / 44100.0}秒）")
-            else log("[声纹] 基准指纹生成失败（放行模式）")
-        } catch (e: Exception) {
-            log("[声纹] 基准音解码失败: ${e.message}（放行模式）")
-        }
-    }
-
-    private fun sleepMs(ms: Long) {
-        try { Thread.sleep(ms) } catch (_: Exception) {}
-    }
-
-    // ============ 通知 ============
-    private fun sendNotify(title: String, text: String, id: Int = NOTI_ID_ALERT) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-        val nm = getSystemService(NotificationManager::class.java)
-        val pi = PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE
-        )
-        val n: Notification = Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle(title)
-            .setContentText(text)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentIntent(pi)
-            .setAutoCancel(true)
-            .build()
-        nm.notify(id, n)
-    }
-
-    // ============ 媒体音量自检 ============
-    private fun checkMediaVolume() {
-        try {
-            val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-            val vol = am.getStreamVolume(AudioManager.STREAM_MUSIC)
-            if (vol == 0) {
-                log("[自检] 媒体音量为0！提示音链路第一环已断")
-                sendNotify("轻点自检：媒体音量为0", "提示音不会响！请按音量键调高媒体音量")
-            } else {
-                log("[自检] 媒体音量=$vol，链路正常")
-            }
-        } catch (e: Exception) {
-            log("[自检] 音量读取失败: ${e.message}")
-        }
-    }
-
-    // ============ 看门狗 ============
-    private fun startWatchdog() {
-        heartbeat = System.currentTimeMillis()
-        watchdogTask?.let { handler.removeCallbacks(it) }
-        val task = object : Runnable {
-            override fun run() {
-                val gap = System.currentTimeMillis() - heartbeat
-                if (isRunning && gap > 90_000) {
-                    watchdogRestarts++
-                    log("[看门狗] 心跳超时${gap / 1000}秒，第${watchdogRestarts}次自动恢复")
-                    sendNotify("轻点自动恢复", "检测到休克，已自动拉起（第${watchdogRestarts}次）")
-                    heartbeat = System.currentTimeMillis()
-                    cancelWatch()
-                    scheduleWatchTick(0, 100)
-                }
-                handler.postDelayed(this, 30_000)
-            }
-        }
-        watchdogTask = task
-        handler.postDelayed(task, 30_000)
-    }
-
-    private fun touchHeartbeat() {
-        heartbeat = System.currentTimeMillis()
-    }
-
-    private fun verifyVoiceprint(): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) { log("[判定] 声纹免检:系统低于Q"); return true }
-        if (baselineFp == null) { log("[判定] 声纹免检:基准未就绪"); return true }
-        if (vpThread?.isAlive != true) { log("[判定] 声纹免检:捕获线程未运行"); return true }
-        return System.currentTimeMillis() - latestMatch < 2500
-    }
-
-    private fun logDecision(verdict: String, reason: String) {
-        val time = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.CHINA).format(Date())
-        log("[判定] $verdict | 依据: $reason")
-        try {
-            val dir = File(getExternalFilesDir(null), "decisions")
-            if (!dir.exists()) dir.mkdirs()
-            File(dir, "d_${System.currentTimeMillis()}.txt").writeText("$time\n$verdict\n$reason")
-        } catch (_: Exception) {}
-    }
-
-    // ============ 声音哨兵（模式闸门 + 日志节流） ============
-    private val soundCallback = object : AudioManager.AudioPlaybackCallback() {
-        override fun onPlaybackConfigChanged(configs: MutableList<AudioPlaybackConfiguration>) {
-            touchHeartbeat()
-            // 模式闸门：只有哨兵模式响应声音，其他模式零日志零开销
-            if (currentMode != MainActivity.MODE_SENTRY) return
-            val targetPkg = sp.getString("app_pkg", null) ?: return
-            val isTargetPlaying = configs.any { uidMatches(it, targetPkg) }
-            if (!isTargetPlaying) {
-                val uidAllUnknown = configs.isNotEmpty() && configs.all { uidOf(it) == null }
-                if (!uidAllUnknown) return
-                // 节流阀：降级命中最多3秒写一条，防刷屏
-                val nowLog = System.currentTimeMillis()
-                if (nowLog - lastSentinelLog > 3000) {
-                    lastSentinelLog = nowLog
-                    log("[声音哨兵] 降级命中(反射不可用)")
-                }
-            } else {
-                log("[声音哨兵] 精确命中 $targetPkg")
-            }
-
-            if (!verifyVoiceprint()) {
-                logDecision("拦截", "声纹不匹配")
-                return
-            }
-
-            val now = System.currentTimeMillis()
-            if (now - lastSoundTrigger < 30000) return
-            lastSoundTrigger = now
-            logDecision("放行", "目标App出声+声纹通过，冷却窗口通过")
-            onNotiFired()
-        }
-    }
-
-    private fun uidOf(cfg: AudioPlaybackConfiguration): Int? {
-        return try {
-            val targetPkg = sp.getString("app_pkg", null) ?: return null
-            val uid = packageManager.getApplicationInfo(targetPkg, 0).uid
-            val cls = AudioPlaybackConfiguration::class.java
-            try {
-                val f = cls.getDeclaredField("mUid")
-                f.isAccessible = true
-                if (f.getInt(cfg) == uid) f.getInt(cfg) else null
-            } catch (_: Exception) {
-                val m = cls.getDeclaredMethod("getUid")
-                m.isAccessible = true
-                val got = m.invoke(cfg) as Int
-                if (got == uid) got else null
-            }
-        } catch (_: Exception) { null }
-    }
-
-    private fun uidMatches(cfg: AudioPlaybackConfiguration, targetPkg: String): Boolean {
-        val uid = try {
-            packageManager.getApplicationInfo(targetPkg, 0).uid
-        } catch (_: Exception) { return false }
-        return try {
-            val cls = AudioPlaybackConfiguration::class.java
-            try {
-                val f = cls.getDeclaredField("mUid")
-                f.isAccessible = true
-                f.getInt(cfg) == uid
-            } catch (_: Exception) {
-                val m = cls.getDeclaredMethod("getUid")
-                m.isAccessible = true
-                (m.invoke(cfg) as Int) == uid
-            }
-        } catch (_: Exception) { false }
-    }
-
-    private fun registerSoundSentry() {
-        audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        audioManager?.registerAudioPlaybackCallback(soundCallback, handler)
-        log("[哨兵] 声音监听已注册")
-    }
-
+    // ============ 唯一入口：系统喂事件 ============
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        event ?: return
+        if (!isRunning) return
+        if (currentMode == MainActivity.MODE_SILENT) return  // 静默：微秒级return
         try {
-            event ?: return
-            touchHeartbeat()
             val t = event.eventType
             if (t != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
-                t != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED &&
-                t != AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
+                t != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
             ) return
             val pkg = event.packageName?.toString() ?: return
             if (pkg == packageName) return
-            val targetPkg = sp.getString("app_pkg", null)
-            if (targetPkg != null && pkg != targetPkg) return
-            when (currentMode) {
-                MainActivity.MODE_SHADOW -> tryGrab(realClick = false)
-                MainActivity.MODE_SENTRY -> { /* 哨兵由声音驱动 */ }
-                MainActivity.MODE_SNIPER -> if (isRunning) tryGrab(realClick = true)
-                MainActivity.MODE_SILENT -> { /* 静默：休眠 */ }
-            }
+            val target = sp.getString("app_pkg", null)
+            if (target != null && pkg != target) return
+
+            popupValve()   // 弹窗阀门：全软件唯一自动点击点
+            probe()        // 像素探针：发现"新"角标 → 响铃
         } catch (e: Exception) {
-            log("[事件] 异常: ${e.message}")
+            log("[事件] ${e.message}")
         }
     }
 
-    // ============ 前台通知联动 ============
-    fun onModeChanged() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-        val nm = getSystemService(NotificationManager::class.java)
-        val pi = PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE
-        )
-        val n: Notification = Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle("轻点运行中")
-            .setContentText("模式=${MainActivity.MODE_NAMES[currentMode]}")
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentIntent(pi)
-            .setOngoing(true)
-            .build()
-        nm.notify(NOTI_ID, n)
-    }
-
-    // ============ 哨兵流程 ============
-    fun onNotiFired() {
-        if (!isRunning) return
-        if (currentMode != MainActivity.MODE_SENTRY) return
-        cancelWatch()
-        playAlert()
-        val watchSec = sp.getInt("sentry_watch_sec", 10)
-        log("[哨兵] 声音触发，进入待命${watchSec}秒，等待弹窗")
-        scheduleWatchTick(watchSec * 1000 / 200, 200)
-    }
-
-    private fun scheduleWatchTick(ticksLeft: Int, delayMs: Long) {
-        val task = Runnable {
-            watchTask = null
-            watchConfirm(ticksLeft)
-        }
-        watchTask = task
-        handler.postDelayed(task, delayMs)
-    }
-
-    private fun cancelWatch() {
-        watchTask?.let { handler.removeCallbacks(it) }
-        watchTask = null
-    }
-
-    private fun watchConfirm(ticksLeft: Int) {
-        touchHeartbeat()
-        if (!isRunning || currentMode != MainActivity.MODE_SENTRY) return
-        if (ticksLeft <= 0) {
-            log("[哨兵] 待命结束，未等到确认弹窗，继续蹲守")
-            return
-        }
-        if (tryClickConfirm()) return
-        scheduleWatchTick(ticksLeft - 1, 200)
-    }
-
-    private fun playAlert() {
-        val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        val old = am.getStreamVolume(AudioManager.STREAM_ALARM)
-        am.setStreamVolume(
-            AudioManager.STREAM_ALARM,
-            am.getStreamMaxVolume(AudioManager.STREAM_ALARM),
-            0
-        )
-        val uri = sp.getString("alert_uri", null)?.let {
-            try { android.net.Uri.parse(it) } catch (_: Exception) { null }
-        } ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-        repeat(2) { i ->
-            handler.postDelayed({
-                try {
-                    val r = RingtoneManager.getRingtone(this, uri)
-                    if (r != null) {
-                        r.audioAttributes = AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_ALARM)
-                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                            .build()
-                        r.play()
-                        handler.postDelayed({
-                            try { r.stop() } catch (_: Exception) {}
-                        }, 2000)
-                    } else {
-                        log("[铃声] 获取铃声失败")
-                    }
-                } catch (e: Exception) {
-                    log("[铃声] 第${i + 1}遍失败: ${e.message}")
-                }
-            }, i * 2500L)
-        }
-        handler.postDelayed({
-            am.setStreamVolume(AudioManager.STREAM_ALARM, old, 0)
-        }, 5000)
-    }
-
-    // ============ 共用校验链 ============
-    private fun validateLocate(root: AccessibilityNodeInfo, kw: String, btnRect: Rect): Boolean {
-        val candidates = root.findAccessibilityNodeInfosByText(kw)
-        var target: AccessibilityNodeInfo? = null
-        if (candidates != null) {
-            for (c in candidates) {
-                val txt = c.text?.toString() ?: continue
-                if (txt != kw) continue
-                if (!c.isVisibleToUser) continue
-                val r = Rect()
-                c.getBoundsInScreen(r)
-                if (r.isEmpty || r.top < 0 ||
-                    r.bottom > resources.displayMetrics.heightPixels
-                ) continue
-                target = c
-                break
-            }
-        }
-        if (target == null) return false
-        target.getBoundsInScreen(btnRect)
-        target.recycle()
-
-        val feature = sp.getString("feature_word", "")?.trim() ?: ""
-        if (feature.isNotEmpty()) {
-            val words = feature.split(",", "，").map { it.trim() }.filter { it.isNotEmpty() }
-            var matched = false
-            for (w in words) {
-                val fNodes = root.findAccessibilityNodeInfosByText(w) ?: continue
-                for (f in fNodes) {
-                    if (!f.isVisibleToUser) continue
-                    val fr = Rect()
-                    f.getBoundsInScreen(fr)
-                    f.recycle()
-                    val maxUp = (240 * resources.displayMetrics.density).toInt()
-                    val horizOk = fr.right > btnRect.left && fr.left < btnRect.right
-                    val vertOk = fr.bottom <= btnRect.top + 50 &&
-                            btnRect.top - fr.bottom < maxUp
-                    if (horizOk && vertOk) { matched = true; break }
-                }
-                if (matched) break
-            }
-            if (!matched) {
-                logDecision("拦截", "特征词未匹配（共用校验链）")
-                return false
-            }
-            log("[校验链] 特征词匹配，放行")
-        }
-        return true
-    }
-
-    private fun tryClickConfirm(): Boolean {
-        val custom = sp.getString("confirm_keyword", "")?.trim() ?: ""
-        val kw = if (custom.isNotEmpty()) custom else "确认抢单"
-        val root = rootInActiveWindow ?: return false
+    // ============ 弹窗阀门（两关：关键词按钮 → 特征词） ============
+    private fun popupValve() {
+        val kw = sp.getString("keyword", "")?.trim().orEmpty()
+            .ifEmpty { "确认抢单" }        // 关键词：弹窗按钮上的字，留空走默认
+        val root = rootInActiveWindow ?: return
         val btnRect = Rect()
-        val ok = validateLocate(root, kw, btnRect)
+        val found = findExactButton(root, kw, btnRect)
+        if (!found) { root.recycle(); return }
+        val pass = checkFeatureWord(root, btnRect)
         root.recycle()
-        if (!ok) return false
-
+        if (!pass) {
+            log("[阀门] 特征词不符，不点「$kw」")
+            return
+        }
         val now = System.currentTimeMillis()
-        if (now - lastFire < 500) return true
+        if (now - lastFire < 1500) return   // 冷却：不连点
         lastFire = now
-        val minD = sp.getInt("sentry_delay_min", 0)
-        val maxD = sp.getInt("sentry_delay_max", 0)
+
+        val (minD, maxD) = delayRange()
         val delay = Random.nextLong(minD.toLong(), maxD.toLong() + 1)
-        logDecision("放行", "弹窗校验通过「$kw」，延时${delay}ms")
+
+        if (currentMode == MainActivity.MODE_SHADOW) {
+            log("[影子·试镜] 弹窗命中「$kw」延时${delay}ms（不点击）")
+            return
+        }
+        log("[弹窗] 校验通过「$kw」，延时${delay}ms点击")
         handler.postDelayed({
-            if (isRunning && currentMode == MainActivity.MODE_SENTRY) {
-                clickNodeRect(btnRect)
-            }
+            if (isRunning && currentMode != MainActivity.MODE_SHADOW &&
+                currentMode != MainActivity.MODE_SILENT
+            ) clickRect(btnRect)
         }, delay)
-        return true
     }
 
-    private fun tryGrab(realClick: Boolean) {
-        val custom = sp.getString("keyword", "")?.trim() ?: ""
-        val keywords = if (custom.isNotEmpty()) listOf(custom)
-        else listOf("抢单", "接单", "立即抢")
-        val minD = sp.getInt("sniper_delay_min", 0)
-        val maxD = sp.getInt("sniper_delay_max", 200)
-        val node = rootInActiveWindow ?: return
-        for (kw in keywords) {
-            val btnRect = Rect()
-            if (node.findAccessibilityNodeInfosByText(kw)?.isNotEmpty() == true &&
-                validateLocate(node, kw, btnRect)
-            ) {
-                val now = System.currentTimeMillis()
-                if (now - lastFire < 300) return
-                lastFire = now
-                val delay = Random.nextLong(minD.toLong(), maxD.toLong() + 1)
-                val tag = MainActivity.MODE_NAMES[currentMode]
-                if (!realClick) {
-                    log("[影子·测试]命中「$kw」延时${delay}ms（不点击）")
-                    node.recycle()
-                    return
-                }
-                logDecision("放行", "[$tag]命中「$kw」，延时${delay}ms")
-                node.recycle()
-                handler.postDelayed({ clickTarget(kw) }, delay)
-                return
+    /** 精确文本匹配 + 可见 + 屏幕内，输出按钮区域 */
+    private fun findExactButton(root: AccessibilityNodeInfo, kw: String, out: Rect): Boolean {
+        val candidates = root.findAccessibilityNodeInfosByText(kw) ?: return false
+        for (c in candidates) {
+            if (c.text?.toString() != kw) continue
+            if (!c.isVisibleToUser) continue
+            val r = Rect()
+            c.getBoundsInScreen(r)
+            if (r.isEmpty || r.top < 0 ||
+                r.bottom > resources.displayMetrics.heightPixels
+            ) continue
+            out.set(r)
+            c.recycle()
+            return true
+        }
+        return false
+    }
+
+    /** 特征词阀门：按钮上方必须出现特征词之一，留空=不过滤 */
+    private fun checkFeatureWord(root: AccessibilityNodeInfo, btnRect: Rect): Boolean {
+        val feature = sp.getString("feature_word", "")?.trim().orEmpty()
+        if (feature.isEmpty()) return true
+        val words = feature.split(",", "，").map { it.trim() }.filter { it.isNotEmpty() }
+        for (w in words) {
+            val fNodes = root.findAccessibilityNodeInfosByText(w) ?: continue
+            for (f in fNodes) {
+                if (!f.isVisibleToUser) continue
+                val fr = Rect()
+                f.getBoundsInScreen(fr)
+                f.recycle()
+                val maxUp = (240 * resources.displayMetrics.density).toInt()
+                val horizOk = fr.right > btnRect.left && fr.left < btnRect.right
+                val vertOk = fr.bottom <= btnRect.top + 50 &&
+                        btnRect.top - fr.bottom < maxUp
+                if (horizOk && vertOk) return true
             }
         }
-        node.recycle()
+        return false
     }
 
-    private fun clickTarget(keyword: String) {
-        val node = rootInActiveWindow ?: return
-        val t = node.findAccessibilityNodeInfosByText(keyword)?.firstOrNull {
-            it.isVisibleToUser
-        }
-        if (t == null) {
-            node.recycle()
-            log("[命中] 点击时目标已消失")
-            return
-        }
-        val r = Rect()
-        t.getBoundsInScreen(r)
-        node.recycle()
-        if (r.isEmpty) {
-            log("[命中] 目标区域无效")
-            return
-        }
-        clickNodeRect(r)
+    private fun delayRange(): Pair<Int, Int> =
+        if (currentMode == MainActivity.MODE_SNIPER)
+            sp.getInt("sniper_delay_min", 0) to sp.getInt("sniper_delay_max", 200)
+        else
+            sp.getInt("sentry_delay_min", 0) to sp.getInt("sentry_delay_max", 800)
+
+    // ============ 像素探针：找"新"角标 ============
+    private fun grabKeywords(): List<String> {
+        val custom = sp.getString("keyword", "")?.trim().orEmpty()
+        return if (custom.isNotEmpty()) listOf(custom)
+        else listOf("抢单", "接单", "立即抢")
     }
 
-    private fun clickNodeRect(r: Rect) {
+    private fun probe() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+        if (probeBusy) return
+        // 节点树闸门：屏幕上没有抢单按钮，一步都不走（连截图都省）
+        val root = rootInActiveWindow ?: return
+        val rects = ArrayList<Rect>()
+        for (kw in grabKeywords()) collectButtons(root, kw, rects)
+        root.recycle()
+        if (rects.isEmpty()) { newSeen = false; return }
+
+        probeBusy = true
+        takeScreenshot(mainExecutor, object : TakeScreenshotCallback {
+            override fun onSuccess(screenshot: ScreenshotResult) {
+                try {
+                    val hw = Bitmap.wrapHardwareBuffer(screenshot.hardwareBuffer, screenshot.colorSpace)
+                    val has = hw?.let { countBadge(it, rects) } ?: false
+                    hw?.recycle()
+                    onProbeResult(has, rects.size)
+                } catch (e: Exception) {
+                    log("[探针] ${e.message}")
+                }
+                screenshot.hardwareBuffer.close()
+                probeBusy = false
+            }
+            override fun onFailure(errorCode: Int) {
+                probeBusy = false
+                log("[探针] 截图失败 code=$errorCode")
+            }
+        })
+    }
+
+    private fun collectButtons(root: AccessibilityNodeInfo, kw: String, out: ArrayList<Rect>) {
+        val nodes = root.findAccessibilityNodeInfosByText(kw) ?: return
+        for (n in nodes) {
+            if (n.text?.toString() != kw) continue
+            if (!n.isVisibleToUser) continue
+            val r = Rect()
+            n.getBoundsInScreen(r)
+            if (!r.isEmpty) out.add(r)
+        }
+    }
+
+    /** 数橙红像素（排除抢单按钮区域），命中≥40个 = 有"新"角标 */
+    private fun countBadge(src: Bitmap, exclude: List<Rect>): Boolean {
+        return try {
+            val soft = src.copy(Bitmap.Config.ARGB_8888, false) ?: return false
+            val sw = (soft.width / 3).coerceAtLeast(1)
+            val sh = (soft.height / 3).coerceAtLeast(1)
+            val bmp = Bitmap.createScaledBitmap(soft, sw, sh, false)
+            soft.recycle()
+            val exs = exclude.map {
+                Rect(it.left / 3 - 6, it.top / 3 - 6, it.right / 3 + 6, it.bottom / 3 + 6)
+            }
+            var hit = 0
+            var x = 0
+            while (x < sw) {
+                var y = 0
+                while (y < sh) {
+                    val c = bmp.getPixel(x, y)
+                    val r = (c shr 16) and 0xFF
+                    val g = (c shr 8) and 0xFF
+                    val b = c and 0xFF
+                    if (r >= 180 && g in 70..190 && b <= 120 && r > g + 40) {
+                        var inBtn = false
+                        for (rc in exs) {
+                            if (x >= rc.left && x <= rc.right && y >= rc.top && y <= rc.bottom) {
+                                inBtn = true; break
+                            }
+                        }
+                        if (!inBtn) {
+                            hit++
+                            if (hit >= 40) { bmp.recycle(); return true }
+                        }
+                    }
+                    y += 2
+                }
+                x += 2
+            }
+            bmp.recycle()
+            false
+        } catch (e: Exception) {
+            log("[探针] 像素判定异常: ${e.message}")
+            false
+        }
+    }
+
+    private fun onProbeResult(hasNew: Boolean, cards: Int) {
+        if (currentMode == MainActivity.MODE_SILENT) return
+        if (hasNew) {
+            val now = System.currentTimeMillis()
+            if (!newSeen) {
+                newSeen = true
+                if (currentMode == MainActivity.MODE_SHADOW) {
+                    log("[影子·探针] 发现新单角标（$cards 卡）")
+                } else if (now - lastRing > 15000) {
+                    lastRing = now
+                    log("[探针] 发现新单（$cards 卡），响铃提醒")
+                    playAlert()
+                }
+            }
+        } else {
+            newSeen = false   // 角标消失，下次出现再叫
+        }
+    }
+
+    // ============ 响铃 ============
+    private fun playAlert() {
+        try {
+            val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            val old = am.getStreamVolume(AudioManager.STREAM_ALARM)
+            am.setStreamVolume(
+                AudioManager.STREAM_ALARM,
+                am.getStreamMaxVolume(AudioManager.STREAM_ALARM),
+                0
+            )
+            val uri = sp.getString("alert_uri", null)?.let {
+                try { android.net.Uri.parse(it) } catch (_: Exception) { null }
+            } ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+            repeat(2) { i ->
+                handler.postDelayed({
+                    try {
+                        val r = RingtoneManager.getRingtone(this, uri)
+                        if (r != null) {
+                            r.audioAttributes = AudioAttributes.Builder()
+                                .setUsage(AudioAttributes.USAGE_ALARM)
+                                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                                .build()
+                            r.play()
+                            handler.postDelayed({
+                                try { r.stop() } catch (_: Exception) {}
+                            }, 2000)
+                        }
+                    } catch (e: Exception) {
+                        log("[铃声] 第${i + 1}遍失败: ${e.message}")
+                    }
+                }, i * 2500L)
+            }
+            handler.postDelayed({
+                try { am.setStreamVolume(AudioManager.STREAM_ALARM, old, 0) } catch (_: Exception) {}
+            }, 5000)
+        } catch (e: Exception) {
+            log("[铃声] 异常: ${e.message}")
+        }
+    }
+
+    // ============ 点击 ============
+    private fun clickRect(r: Rect) {
         val insetX = (r.width() * 0.2f).toInt().coerceAtLeast(1)
         val insetY = (r.height() * 0.2f).toInt().coerceAtLeast(1)
         val left = r.left + insetX
@@ -829,13 +373,19 @@ class GrabService : AccessibilityService() {
             .apply()
     }
 
-    private fun log(msg: String) {
-        android.util.Log.d("LightGrab", msg)
-        val time = SimpleDateFormat("HH:mm:ss", Locale.CHINA).format(Date())
-        val old = sp.getString("svc_logs", "") ?: ""
-        var newLogs = "$old\n$time  $msg"
-        if (newLogs.length > 8000) newLogs = newLogs.substring(newLogs.length - 8000)
-        sp.edit().putString("svc_logs", newLogs).apply()
+    // ============ 前台通知（一处定义，两处调用） ============
+    private fun buildNotification(): Notification {
+        val pi = PendingIntent.getActivity(
+            this, 0, Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE
+        )
+        return Notification.Builder(this, CHANNEL_ID)
+            .setContentTitle("轻点运行中")
+            .setContentText("模式=${MainActivity.MODE_NAMES[currentMode]}")
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentIntent(pi)
+            .setOngoing(true)
+            .build()
     }
 
     private fun startFg() {
@@ -844,17 +394,21 @@ class GrabService : AccessibilityService() {
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "轻点前台服务", NotificationManager.IMPORTANCE_LOW)
         )
-        val pi = PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java),
-            PendingIntent.FLAG_IMMUTABLE
-        )
-        val n: Notification = Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle("轻点运行中")
-            .setContentText("模式=${MainActivity.MODE_NAMES[currentMode]}")
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentIntent(pi)
-            .setOngoing(true)
-            .build()
-        startForeground(NOTI_ID, n)
+        startForeground(NOTI_ID, buildNotification())
+    }
+
+    fun onModeChanged() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        try {
+            getSystemService(NotificationManager::class.java).notify(NOTI_ID, buildNotification())
+        } catch (_: Exception) {}
+    }
+
+    // ============ 日志：路由到当前模式池 + 攒批落盘 ============
+    private fun log(msg: String) {
+        android.util.Log.d("LightGrab", msg)
+        pools[currentMode].add(msg)
+        handler.removeCallbacks(flushTask)
+        handler.postDelayed(flushTask, 1000)
     }
 }
