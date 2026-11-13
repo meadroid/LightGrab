@@ -413,7 +413,9 @@ class GrabService : AccessibilityService() {
             if (run > maxRun) maxRun = run
             if (run >= MIN_RUN) count++
             soft.recycle()
-            log("[探针] 角标=$count 最长橙段=$maxRun 行")
+            if (count > 0 || maxRun > 0) {
+                log("[探针] 角标=$count 最长橙段=$maxRun 行")
+            }
             count
         } catch (e: Exception) {
             log("[探针] 像素判定异常: ${e.message}")
