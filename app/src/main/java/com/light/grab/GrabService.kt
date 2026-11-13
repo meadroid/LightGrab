@@ -65,6 +65,7 @@ class GrabService : AccessibilityService() {
 
     private var lastFire = 0L
     private var lastRing = 0L
+    private var lastProbe = 0L          // 【修复2】截图节流
     private var notiRetry = 0
     @Volatile private var newSeen = false
     @Volatile private var probeBusy = false
@@ -250,12 +251,15 @@ class GrabService : AccessibilityService() {
     private fun probe() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
         if (probeBusy) return
+        val now = System.currentTimeMillis()
+        if (now - lastProbe < 1000) return   // 【修复2】1秒节流，防 code=3
         val root = rootInActiveWindow ?: return
         val rects = ArrayList<Rect>()
         for (kw in grabKeywords()) collectButtons(root, kw, rects)
         root.recycle()
         if (rects.isEmpty()) { newSeen = false; return }
 
+        lastProbe = now
         probeBusy = true
         try {
             takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
