@@ -22,6 +22,7 @@ import android.os.Looper
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -61,11 +62,13 @@ class GrabService : AccessibilityService() {
     private lateinit var sp: SharedPreferences
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var pools: Array<LogPool>
-    private val flushTask = Runnable { try { pools.forEach { it.flushIfDirty() } } catch (_: Exception) {} }
+    private val flushTask = Runnable {
+        try { pools.forEach { it.flushIfDirty() } } catch (_: Exception) {}
+    }
 
     private var lastFire = 0L
     private var lastRing = 0L
-    private var lastProbe = 0L          // 【修复2】截图节流
+    private var lastProbe = 0L
     private var notiRetry = 0
     @Volatile private var newSeen = false
     @Volatile private var probeBusy = false
@@ -95,7 +98,7 @@ class GrabService : AccessibilityService() {
         } catch (_: Exception) {
             currentMode = MainActivity.MODE_SHADOW
         }
-        log("[服务] 已连接 · 精简版，模式=${MainActivity.MODE_NAMES[safeLogIndex()]}")
+        log("[服务] 已连接 · 全窗口版，模式=${MainActivity.MODE_NAMES[safeLogIndex()]}")
         mountNotification()
     }
 
@@ -156,6 +159,11 @@ class GrabService : AccessibilityService() {
             val target = sp.getString("app_pkg", null)
             if (target != null && pkg != target) return
 
+            // 诊断：窗口切换时记录包名，验证事件是否进来
+            if (t == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+                log("[事件] 窗口切换: $pkg")
+            }
+
             popupValve()
             probe()
         } catch (e: Exception) {
@@ -163,20 +171,53 @@ class GrabService : AccessibilityService() {
         }
     }
 
+    /**
+     * 核心改动：不再依赖 rootInActiveWindow（拿不到独立Dialog窗口），
+     * 遍历屏幕上全部窗口找「确认抢单」按钮。弹窗窗口按Z序排最前。
+     */
     private fun popupValve() {
         val kw = sp.getString("keyword", "")?.trim().orEmpty().ifEmpty { "确认抢单" }
-        val root = rootInActiveWindow ?: return
-        val btnRect = Rect()
-        val found = findExactButton(root, kw, btnRect)
-        if (!found) { root.recycle(); return }
-        val pass = checkFeatureWord(root, btnRect)
-        root.recycle()
+
+        val winList = windows ?: run {
+            log("[阀门] 窗口列表为 null")
+            return
+        }
+        if (winList.isEmpty()) {
+            log("[阀门] 屏幕上没有可读窗口")
+            return
+        }
+
+        var btnRect: Rect? = null
+        var featureRoot: AccessibilityNodeInfo? = null
+
+        for (w in winList) {
+            val root = w.root ?: continue
+            val r = Rect()
+            if (findExactButton(root, kw, r)) {
+                btnRect = r
+                featureRoot = AccessibilityNodeInfo.obtain(root)
+                root.recycle()
+                break
+            }
+            root.recycle()
+        }
+
+        if (btnRect == null || featureRoot == null) {
+            log("[阀门] 各窗口均未找到「$kw」按钮")
+            return
+        }
+
+        val pass = checkFeatureWord(featureRoot, btnRect)
+        featureRoot.recycle()
         if (!pass) {
             log("[阀门] 特征词不符，不点「$kw」")
             return
         }
         val now = System.currentTimeMillis()
-        if (now - lastFire < 1500) return
+        if (now - lastFire < 1500) {
+            log("[阀门] 1500ms防重窗口内，跳过本次")
+            return
+        }
         lastFire = now
 
         val (minD, maxD) = delayRange()
@@ -187,10 +228,11 @@ class GrabService : AccessibilityService() {
             return
         }
         log("[弹窗] 校验通过「$kw」，延时${delay}ms点击")
+        val rect = btnRect
         handler.postDelayed({
             if (isRunning && currentMode != MainActivity.MODE_SHADOW &&
                 currentMode != MainActivity.MODE_SILENT
-            ) clickRect(btnRect)
+            ) clickRect(rect)
         }, delay)
     }
 
@@ -205,7 +247,6 @@ class GrabService : AccessibilityService() {
                 r.bottom > resources.displayMetrics.heightPixels
             ) continue
             out.set(r)
-            c.recycle()
             return true
         }
         return false
@@ -221,7 +262,6 @@ class GrabService : AccessibilityService() {
                 if (!f.isVisibleToUser) continue
                 val fr = Rect()
                 f.getBoundsInScreen(fr)
-                f.recycle()
                 val maxUp = (240 * resources.displayMetrics.density).toInt()
                 val horizOk = fr.right > btnRect.left && fr.left < btnRect.right
                 val vertOk = fr.bottom <= btnRect.top + 50 &&
@@ -252,7 +292,7 @@ class GrabService : AccessibilityService() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
         if (probeBusy) return
         val now = System.currentTimeMillis()
-        if (now - lastProbe < 1000) return   // 【修复2】1秒节流，防 code=3
+        if (now - lastProbe < 1000) return
         val root = rootInActiveWindow ?: return
         val rects = ArrayList<Rect>()
         for (kw in grabKeywords()) collectButtons(root, kw, rects)
