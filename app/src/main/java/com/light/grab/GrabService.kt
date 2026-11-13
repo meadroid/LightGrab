@@ -157,16 +157,20 @@ class GrabService : AccessibilityService() {
             if (pkg == packageName) return
             val target = sp.getString("app_pkg", null)
             if (target != null && pkg != target) return
+
             popupValve()
-            probe()
+            // 狙击不扫探针：省电省内存，界面自己刷
+            if (currentMode != MainActivity.MODE_SNIPER) {
+                probe()
+            }
         } catch (e: Exception) {
             android.util.Log.e("LightGrab", "event", e)
         }
     }
 
-    // ===== 匹配核心（A1/B1）：去空白 + 完整包含 =====
+    // ===== 匹配核心（A1/B1）：去空白 + 完整包含，三处统一 =====
 
-    /** 清掉所有空白字符（含全角空格、不可见空白），比对前双方都过一遍 */
+    /** 清掉所有空白字符（含全角空格、不可见空白） */
     private fun norm(s: String): String = s.replace(Regex("\\s+"), "")
 
     /** 设置词去空白后，完整出现在节点文字（去空白后）里 → 中；差一个字都不中 */
@@ -185,14 +189,17 @@ class GrabService : AccessibilityService() {
             .split(",", "，").map { it.trim() }.filter { it.isNotEmpty() }
 
     /**
-     * 门卫模型（B2）：先搜特征词 → 不符只写一行日志，关键词看都不看；
-     * 符合 → 进门搜关键词（未命中纯静默，B4）→ 四道关卡 → 延时点击。
+     * 门卫流程（哨兵/狙击/影子共享，B2）：
+     * ①特征词先行 → 不符一行日志蹲守，关键词不看；
+     * ②相符进门只查关键词 → 未命中纯静默（B4）；
+     * ③核对特征词与按钮位置；
+     * ④1500ms防重 → 随机延时 → 重取最新坐标散点点击。
      * 只搜焦点窗口（A3），不扫全窗口不递归。
      */
     private fun popupValve() {
         val root = rootInActiveWindow ?: return
         try {
-            // 第一关 · 门卫：特征词先行
+            // ① 门卫：特征词先行
             val words = featureWords()
             var featureRect: Rect? = null
             if (words.isNotEmpty()) {
@@ -203,18 +210,18 @@ class GrabService : AccessibilityService() {
                 }
             }
 
-            // 第二关 · 进门：搜关键词按钮（未命中 → 纯静默，B4）
+            // ② 进门：查关键词按钮（未命中 → 纯静默，B4）
             val kw = keyword()
             if (kw.isEmpty()) return
             val btnRect = findButtonRect(root, kw) ?: return
 
-            // 第三关 · 特征词位置校验（特征词须在按钮上方 240dp 内、横向有交叠）
+            // ③ 位置核对：特征词须在按钮上方240dp内、横向有交叠
             if (featureRect != null && !featureAboveButton(featureRect, btnRect)) {
                 log("[阀门] 特征词不符")
                 return
             }
 
-            // 第四关 · 1500ms 防重窗口
+            // ④ 防重窗口
             val now = System.currentTimeMillis()
             if (now - lastFire < 1500) return
             lastFire = now
@@ -223,10 +230,10 @@ class GrabService : AccessibilityService() {
             val delay = Random.nextLong(minD.toLong(), maxD.toLong() + 1)
 
             if (currentMode == MainActivity.MODE_SHADOW) {
-                log("[影子·试镜] 命中「$kw」延时${delay}ms（不点击）")
+                log("[影子·试镜] 全链通过「$kw」延时${delay}ms（验证完成，不点击）")
                 return
             }
-            log("[命中校验通过] 「$kw」延时${delay}ms点击")
+            log("[通过] 「$kw」延时${delay}ms点击")
 
             // A6：延时结束、下手那一刻，重取焦点窗口 → 重搜 → 拿最新坐标
             handler.postDelayed({
@@ -239,7 +246,7 @@ class GrabService : AccessibilityService() {
         }
     }
 
-    /** A6：点击前重新瞄一眼，按当下最新坐标下手；瞄不到了就静默放弃 */
+    /** A6：点击前重新瞄一眼，按当下最新坐标下手；瞄不到就静默放弃 */
     private fun regrabAndClick(kw: String) {
         val root = rootInActiveWindow ?: return
         try {
@@ -281,7 +288,7 @@ class GrabService : AccessibilityService() {
         return null
     }
 
-    /** 特征词须在按钮上方 240dp 内、横向有交叠 */
+    /** 特征词须在按钮上方240dp内、横向有交叠 */
     private fun featureAboveButton(fr: Rect, btn: Rect): Boolean {
         val maxUp = (240 * resources.displayMetrics.density).toInt()
         val horizOk = fr.right > btn.left && fr.left < btn.right
@@ -289,7 +296,7 @@ class GrabService : AccessibilityService() {
         return horizOk && vertOk
     }
 
-    // ===== 以下 C 组：全部锁死，原样保留 =====
+    // ===== C 组锁死区：随机延时、命中计数、散点、响铃、探针，原样保留 =====
 
     private fun delayRange(): Pair<Int, Int> {
         val (lo, hi) = if (currentMode == MainActivity.MODE_SNIPER)
@@ -309,6 +316,7 @@ class GrabService : AccessibilityService() {
 
     private fun probe() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+        if (currentMode == MainActivity.MODE_SNIPER) return   // 狙击永不扫（双保险）
         if (probeBusy) return
         val now = System.currentTimeMillis()
         if (now - lastProbe < 1000) return
@@ -405,13 +413,23 @@ class GrabService : AccessibilityService() {
             val now = System.currentTimeMillis()
             if (!newSeen) {
                 newSeen = true
-                if (currentMode == MainActivity.MODE_SHADOW) {
-                    log("[影子·探针] 发现新单角标（$cards 卡）")
-                } else if (now - lastRing > 15000) {
-                    lastRing = now
-                    log("[探针] 发现新单（$cards 卡），响铃提醒")
-                    playAlert()
+                when (currentMode) {
+                    MainActivity.MODE_SHADOW -> {
+                        log("[影子·探针] 发现新单角标（$cards 卡）")
+                        if (now - lastRing > 15000) {
+                            lastRing = now
+                            playAlert()   // 影子也响：验证线路畅通
+                        }
+                    }
+                    MainActivity.MODE_SENTRY -> {
+                        if (now - lastRing > 15000) {
+                            lastRing = now
+                            log("[哨兵·探针] 发现新单（$cards 卡），吹哨提醒")
+                            playAlert()
+                        }
+                    }
                 }
+                // 狙击：不响（自己刷界面），此处事件到不了（probe已挡）
             }
         } else {
             newSeen = false
@@ -457,7 +475,7 @@ class GrabService : AccessibilityService() {
         }
     }
 
-    /** C5 锁死：三点散点 · 安全边距20%内取点，单点永不出现 */
+    /** C5 锁死：散点点击 · 一次点击，落点在安全边距(20%)内随机散布 */
     private fun clickRect(r: Rect) {
         val insetX = (r.width() * 0.2f).toInt().coerceAtLeast(1)
         val insetY = (r.height() * 0.2f).toInt().coerceAtLeast(1)
