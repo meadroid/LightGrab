@@ -69,22 +69,30 @@ class GrabService : AccessibilityService() {
     @Volatile private var newSeen = false   // 角标去重：同一批新单只叫一次
     @Volatile private var probeBusy = false // 探针串行闸门
 
+    /** 越界模式号一律拉回影子（老配置兼容护栏） */
+    private fun safeLogIndex(): Int = currentMode.coerceIn(0, 3)
+
     // ============ 生命周期 ============
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
         try {
             startFg()
-            currentMode = sp.getInt("mode", MainActivity.MODE_SHADOW)
-            log("[服务] 已连接 · 精简版，模式=${MainActivity.MODE_NAMES[currentMode]}")
         } catch (e: Exception) {
-            log("[服务] 启动异常: ${e.message}")
+            android.util.Log.e("LightGrab", "startFg fail", e)
         }
+        try {
+            currentMode = sp.getInt("mode", MainActivity.MODE_SHADOW)
+                .coerceIn(0, 3)   // 老配置毒值护栏
+        } catch (_: Exception) {
+            currentMode = MainActivity.MODE_SHADOW
+        }
+        log("[服务] 已连接 · 精简版，模式=${MainActivity.MODE_NAMES[safeLogIndex()]}")
     }
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
-        pools.forEach { it.flushIfDirty() }
+        try { pools.forEach { it.flushIfDirty() } } catch (_: Exception) {}
         instance = null
         super.onDestroy()
     }
@@ -111,7 +119,7 @@ class GrabService : AccessibilityService() {
             popupValve()   // 弹窗阀门：全软件唯一自动点击点
             probe()        // 像素探针：发现"新"角标 → 响铃
         } catch (e: Exception) {
-            log("[事件] ${e.message}")
+            android.util.Log.e("LightGrab", "event", e)
         }
     }
 
@@ -188,11 +196,16 @@ class GrabService : AccessibilityService() {
         return false
     }
 
-    private fun delayRange(): Pair<Int, Int> =
-        if (currentMode == MainActivity.MODE_SNIPER)
+    /** 延时区间（出口强制 max≥min：旧配置倒挂值到此归位，nextLong 不再炸） */
+    private fun delayRange(): Pair<Int, Int> {
+        val (lo, hi) = if (currentMode == MainActivity.MODE_SNIPER)
             sp.getInt("sniper_delay_min", 0) to sp.getInt("sniper_delay_max", 200)
         else
             sp.getInt("sentry_delay_min", 0) to sp.getInt("sentry_delay_max", 800)
+        val min = lo.coerceIn(0, 10000)
+        val max = hi.coerceIn(min, 10000)
+        return min to max
+    }
 
     // ============ 像素探针：找"新"角标 ============
     private fun grabKeywords(): List<String> {
@@ -212,24 +225,30 @@ class GrabService : AccessibilityService() {
         if (rects.isEmpty()) { newSeen = false; return }
 
         probeBusy = true
-        takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
-            override fun onSuccess(screenshot: ScreenshotResult) {
-                try {
-                    val hw = Bitmap.wrapHardwareBuffer(screenshot.hardwareBuffer, screenshot.colorSpace)
-                    val has = hw?.let { countBadge(it, rects) } ?: false
-                    hw?.recycle()
-                    onProbeResult(has, rects.size)
-                } catch (e: Exception) {
-                    log("[探针] ${e.message}")
+        try {
+            takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
+                override fun onSuccess(screenshot: ScreenshotResult) {
+                    try {
+                        val hw = Bitmap.wrapHardwareBuffer(screenshot.hardwareBuffer, screenshot.colorSpace)
+                        val has = hw?.let { countBadge(it, rects) } ?: false
+                        hw?.recycle()
+                        onProbeResult(has, rects.size)
+                    } catch (e: Exception) {
+                        log("[探针] ${e.message}")
+                    }
+                    screenshot.hardwareBuffer.close()
+                    probeBusy = false
                 }
-                screenshot.hardwareBuffer.close()
-                probeBusy = false
-            }
-            override fun onFailure(errorCode: Int) {
-                probeBusy = false
-                log("[探针] 截图失败 code=$errorCode")
-            }
-        })
+                override fun onFailure(errorCode: Int) {
+                    probeBusy = false
+                    log("[探针] 截图失败 code=$errorCode")
+                }
+            })
+        } catch (e: Exception) {
+            // 个别机型截图权限异常：绝不漏出异常炸服务
+            probeBusy = false
+            log("[探针] 截图调用异常: ${e.message}")
+        }
     }
 
     private fun collectButtons(root: AccessibilityNodeInfo, kw: String, out: ArrayList<Rect>) {
@@ -382,7 +401,7 @@ class GrabService : AccessibilityService() {
         )
         return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("轻点运行中")
-            .setContentText("模式=${MainActivity.MODE_NAMES[currentMode]}")
+            .setContentText("模式=${MainActivity.MODE_NAMES[safeLogIndex()]}")
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentIntent(pi)
             .setOngoing(true)
@@ -391,25 +410,30 @@ class GrabService : AccessibilityService() {
 
     private fun startFg() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-        val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, "轻点前台服务", NotificationManager.IMPORTANCE_LOW)
-        )
+        try {
+            val nm = getSystemService(NotificationManager::class.java)
+            nm.createNotificationChannel(
+                NotificationChannel(CHANNEL_ID, "轻点前台服务", NotificationManager.IMPORTANCE_LOW)
+            )
+        } catch (_: Exception) {}
+        // 建渠道和挂前台分步容错：渠道失败不拖累前台
         startForeground(NOTI_ID, buildNotification())
     }
 
     fun onModeChanged() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         try {
-            getSystemService(NotificationManager::class.java).notify(NOTI_ID, buildNotification())
+            getSystemService(NotificationManager::class.java)
+                .notify(NOTI_ID, buildNotification())
         } catch (_: Exception) {}
     }
 
     // ============ 日志：路由到当前模式池 + 攒批落盘 ============
     private fun log(msg: String) {
         android.util.Log.d("LightGrab", msg)
-        pools[currentMode].add(msg)
-        handler.removeCallbacks(flushTask)
-        handler.postDelayed(flushTask, 1000)
+        try {
+            pools[safeLogIndex()].add(msg)
+            handler.removeCallbacks(flushTask)
+            handler.postDelayed(flushTask, 1000)
+        } catch (_: Exception) {}
     }
 }
