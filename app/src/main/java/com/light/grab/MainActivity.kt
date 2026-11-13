@@ -45,12 +45,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var logScroll: ScrollView
     private lateinit var btnMain: Button
     private lateinit var btnArsenal: TextView
-    private val logBuf = StringBuilder()   // 本界面自己的消息
+    private val logBuf = StringBuilder()
     private var running = false
 
     private val refresh = object : Runnable {
         override fun run() {
-            if (isFinishing || isDestroyed) return   // 退出页面就停表
+            if (isFinishing || isDestroyed) return
             refreshStatus()
             syncServiceLogs()
             tvStatus.postDelayed(this, 1000)
@@ -61,6 +61,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         sp = getSharedPreferences("lightdot", Context.MODE_PRIVATE)
+        showLastCrash()   // 黑匣子回放：上次崩了先交代
         tvLog = findViewById(R.id.tvLog)
         tvStatus = findViewById(R.id.tvStatus)
         logScroll = findViewById(R.id.logScroll)
@@ -94,12 +95,27 @@ class MainActivity : AppCompatActivity() {
         } else {
             setMode(sp.getInt("mode", MODE_SHADOW).coerceIn(0, 3))
         }
-        askNotificationPermission()   // Android 13+ 通知运行时权限
+        askNotificationPermission()
         log("轻点已启动 · 精简版")
         tvStatus.post(refresh)
     }
 
-    /** Android 13+ 必须拿到通知权限，前台常驻通知才肯露脸 */
+    /** 上次崩溃全文：弹窗展示，可复制，看完清除 */
+    private fun showLastCrash() {
+        val crash = sp.getString("last_crash", null) ?: return
+        sp.edit().remove("last_crash").apply()
+        AlertDialog.Builder(this)
+            .setTitle("检测到上次崩溃")
+            .setMessage(crash)
+            .setPositiveButton("复制全文") { _, _ ->
+                val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cm.setPrimaryClip(ClipData.newPlainText("crash", crash))
+                Toast.makeText(this, "已复制，发给开发者", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("关闭", null)
+            .show()
+    }
+
     private fun askNotificationPermission() {
         if (Build.VERSION.SDK_INT >= 33) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
@@ -116,7 +132,7 @@ class MainActivity : AppCompatActivity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == REQ_NOTI) {
             if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
-                GrabService.instance?.onModeChanged()   // 拿到权限立刻补挂常驻通知
+                GrabService.instance?.onModeChanged()
             } else {
                 Toast.makeText(this, "未授权通知：常驻通知将不显示，但监听仍可运行", Toast.LENGTH_LONG).show()
             }
@@ -140,7 +156,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setMode(mode: Int) {
-        val m = mode.coerceIn(0, 3)   // 护栏：越界一律拉回
+        val m = mode.coerceIn(0, 3)
         GrabService.currentMode = m
         sp.edit().putInt("mode", m).apply()
         CHIP_IDS.forEachIndexed { index, id ->
@@ -156,7 +172,7 @@ class MainActivity : AppCompatActivity() {
         GrabService.instance?.onModeChanged()
         refreshStatus()
         log("模式切换 → ${MODE_NAMES[m]}")
-        syncServiceLogs()   // 切模式立即换日志池
+        syncServiceLogs()
     }
 
     private fun refreshStatus() {
@@ -177,7 +193,6 @@ class MainActivity : AppCompatActivity() {
         tvStatus.text = "$line1\n$line2\n$line3"
     }
 
-    /** 显示当前模式的日志池 */
     private fun syncServiceLogs() {
         val m = GrabService.currentMode.coerceIn(0, 3)
         val svc = sp.getString("logs_m$m", "") ?: ""
