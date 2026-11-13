@@ -22,7 +22,6 @@ import android.os.Looper
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import android.view.accessibility.AccessibilityWindowInfo
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -98,7 +97,7 @@ class GrabService : AccessibilityService() {
         } catch (_: Exception) {
             currentMode = MainActivity.MODE_SHADOW
         }
-        log("[服务] 已连接 · 全窗口版，模式=${MainActivity.MODE_NAMES[safeLogIndex()]}")
+        log("[服务] 已连接 · 焦点窗口版，模式=${MainActivity.MODE_NAMES[safeLogIndex()]}")
         mountNotification()
     }
 
@@ -158,12 +157,6 @@ class GrabService : AccessibilityService() {
             if (pkg == packageName) return
             val target = sp.getString("app_pkg", null)
             if (target != null && pkg != target) return
-
-            // 诊断：窗口切换时记录包名，验证事件是否进来
-            if (t == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-                log("[事件] 窗口切换: $pkg")
-            }
-
             popupValve()
             probe()
         } catch (e: Exception) {
@@ -171,106 +164,132 @@ class GrabService : AccessibilityService() {
         }
     }
 
-    /**
-     * 核心改动：不再依赖 rootInActiveWindow（拿不到独立Dialog窗口），
-     * 遍历屏幕上全部窗口找「确认抢单」按钮。弹窗窗口按Z序排最前。
-     */
-    private fun popupValve() {
-        val kw = sp.getString("keyword", "")?.trim().orEmpty().ifEmpty { "确认抢单" }
+    // ===== 匹配核心（A1/B1）：去空白 + 完整包含 =====
 
-        val winList = windows ?: run {
-            log("[阀门] 窗口列表为 null")
-            return
-        }
-        if (winList.isEmpty()) {
-            log("[阀门] 屏幕上没有可读窗口")
-            return
-        }
+    /** 清掉所有空白字符（含全角空格、不可见空白），比对前双方都过一遍 */
+    private fun norm(s: String): String = s.replace(Regex("\\s+"), "")
 
-        var btnRect: Rect? = null
-        var featureRoot: AccessibilityNodeInfo? = null
-
-        for (w in winList) {
-            val root = w.root ?: continue
-            val r = Rect()
-            if (findExactButton(root, kw, r)) {
-                btnRect = r
-                featureRoot = AccessibilityNodeInfo.obtain(root)
-                root.recycle()
-                break
-            }
-            root.recycle()
-        }
-
-        if (btnRect == null || featureRoot == null) {
-            log("[阀门] 各窗口均未找到「$kw」按钮")
-            return
-        }
-
-        val pass = checkFeatureWord(featureRoot, btnRect)
-        featureRoot.recycle()
-        if (!pass) {
-            log("[阀门] 特征词不符，不点「$kw」")
-            return
-        }
-        val now = System.currentTimeMillis()
-        if (now - lastFire < 1500) {
-            log("[阀门] 1500ms防重窗口内，跳过本次")
-            return
-        }
-        lastFire = now
-
-        val (minD, maxD) = delayRange()
-        val delay = Random.nextLong(minD.toLong(), maxD.toLong() + 1)
-
-        if (currentMode == MainActivity.MODE_SHADOW) {
-            log("[影子·试镜] 弹窗命中「$kw」延时${delay}ms（不点击）")
-            return
-        }
-        log("[弹窗] 校验通过「$kw」，延时${delay}ms点击")
-        val rect = btnRect
-        handler.postDelayed({
-            if (isRunning && currentMode != MainActivity.MODE_SHADOW &&
-                currentMode != MainActivity.MODE_SILENT
-            ) clickRect(rect)
-        }, delay)
+    /** 设置词去空白后，完整出现在节点文字（去空白后）里 → 中；差一个字都不中 */
+    private fun containsWord(nodeText: CharSequence?, word: String): Boolean {
+        if (nodeText == null) return false
+        val w = norm(word)
+        if (w.isEmpty()) return false
+        return norm(nodeText.toString()).contains(w)
     }
 
-    private fun findExactButton(root: AccessibilityNodeInfo, kw: String, out: Rect): Boolean {
-        val candidates = root.findAccessibilityNodeInfosByText(kw) ?: return false
+    private fun keyword(): String =
+        sp.getString("keyword", "")?.trim().orEmpty()
+
+    private fun featureWords(): List<String> =
+        sp.getString("feature_word", "")?.trim().orEmpty()
+            .split(",", "，").map { it.trim() }.filter { it.isNotEmpty() }
+
+    /**
+     * 门卫模型（B2）：先搜特征词 → 不符只写一行日志，关键词看都不看；
+     * 符合 → 进门搜关键词（未命中纯静默，B4）→ 四道关卡 → 延时点击。
+     * 只搜焦点窗口（A3），不扫全窗口不递归。
+     */
+    private fun popupValve() {
+        val root = rootInActiveWindow ?: return
+        try {
+            // 第一关 · 门卫：特征词先行
+            val words = featureWords()
+            var featureRect: Rect? = null
+            if (words.isNotEmpty()) {
+                featureRect = findFeatureRect(root, words)
+                if (featureRect == null) {
+                    log("[阀门] 特征词不符")   // B3：就这一行，不刷屏
+                    return
+                }
+            }
+
+            // 第二关 · 进门：搜关键词按钮（未命中 → 纯静默，B4）
+            val kw = keyword()
+            if (kw.isEmpty()) return
+            val btnRect = findButtonRect(root, kw) ?: return
+
+            // 第三关 · 特征词位置校验（特征词须在按钮上方 240dp 内、横向有交叠）
+            if (featureRect != null && !featureAboveButton(featureRect, btnRect)) {
+                log("[阀门] 特征词不符")
+                return
+            }
+
+            // 第四关 · 1500ms 防重窗口
+            val now = System.currentTimeMillis()
+            if (now - lastFire < 1500) return
+            lastFire = now
+
+            val (minD, maxD) = delayRange()
+            val delay = Random.nextLong(minD.toLong(), maxD.toLong() + 1)
+
+            if (currentMode == MainActivity.MODE_SHADOW) {
+                log("[影子·试镜] 命中「$kw」延时${delay}ms（不点击）")
+                return
+            }
+            log("[命中校验通过] 「$kw」延时${delay}ms点击")
+
+            // A6：延时结束、下手那一刻，重取焦点窗口 → 重搜 → 拿最新坐标
+            handler.postDelayed({
+                if (isRunning && currentMode != MainActivity.MODE_SHADOW &&
+                    currentMode != MainActivity.MODE_SILENT
+                ) regrabAndClick(kw)
+            }, delay)
+        } finally {
+            root.recycle()
+        }
+    }
+
+    /** A6：点击前重新瞄一眼，按当下最新坐标下手；瞄不到了就静默放弃 */
+    private fun regrabAndClick(kw: String) {
+        val root = rootInActiveWindow ?: return
+        try {
+            val rect = findButtonRect(root, kw) ?: return
+            clickRect(rect)
+        } finally {
+            root.recycle()
+        }
+    }
+
+    /** 焦点窗口内找关键词按钮：去空白+完整包含，可见、坐标在屏幕内 */
+    private fun findButtonRect(root: AccessibilityNodeInfo, kw: String): Rect? {
+        val candidates = root.findAccessibilityNodeInfosByText(kw) ?: return null
         for (c in candidates) {
-            if (c.text?.toString() != kw) continue
+            if (!containsWord(c.text, kw)) continue
             if (!c.isVisibleToUser) continue
             val r = Rect()
             c.getBoundsInScreen(r)
             if (r.isEmpty || r.top < 0 ||
                 r.bottom > resources.displayMetrics.heightPixels
             ) continue
-            out.set(r)
-            return true
+            return r
         }
-        return false
+        return null
     }
 
-    private fun checkFeatureWord(root: AccessibilityNodeInfo, btnRect: Rect): Boolean {
-        val feature = sp.getString("feature_word", "")?.trim().orEmpty()
-        if (feature.isEmpty()) return true
-        val words = feature.split(",", "，").map { it.trim() }.filter { it.isNotEmpty() }
+    /** 门卫搜特征词：任一特征词在焦点窗口可见即放行，返回该节点坐标 */
+    private fun findFeatureRect(root: AccessibilityNodeInfo, words: List<String>): Rect? {
         for (w in words) {
-            val fNodes = root.findAccessibilityNodeInfosByText(w) ?: continue
-            for (f in fNodes) {
-                if (!f.isVisibleToUser) continue
-                val fr = Rect()
-                f.getBoundsInScreen(fr)
-                val maxUp = (240 * resources.displayMetrics.density).toInt()
-                val horizOk = fr.right > btnRect.left && fr.left < btnRect.right
-                val vertOk = fr.bottom <= btnRect.top + 50 &&
-                        btnRect.top - fr.bottom < maxUp
-                if (horizOk && vertOk) return true
+            val nodes = root.findAccessibilityNodeInfosByText(w) ?: continue
+            for (n in nodes) {
+                if (!containsWord(n.text, w)) continue
+                if (!n.isVisibleToUser) continue
+                val r = Rect()
+                n.getBoundsInScreen(r)
+                if (!r.isEmpty) return r
             }
         }
-        return false
+        return null
     }
+
+    /** 特征词须在按钮上方 240dp 内、横向有交叠 */
+    private fun featureAboveButton(fr: Rect, btn: Rect): Boolean {
+        val maxUp = (240 * resources.displayMetrics.density).toInt()
+        val horizOk = fr.right > btn.left && fr.left < btn.right
+        val vertOk = fr.bottom <= btn.top + 50 && btn.top - fr.bottom < maxUp
+        return horizOk && vertOk
+    }
+
+    // ===== 以下 C 组：全部锁死，原样保留 =====
 
     private fun delayRange(): Pair<Int, Int> {
         val (lo, hi) = if (currentMode == MainActivity.MODE_SNIPER)
@@ -282,10 +301,10 @@ class GrabService : AccessibilityService() {
         return min to max
     }
 
+    /** A2：默认短词作废，只认设置里填的词，没填返回空（不搜） */
     private fun grabKeywords(): List<String> {
         val custom = sp.getString("keyword", "")?.trim().orEmpty()
-        return if (custom.isNotEmpty()) listOf(custom)
-        else listOf("抢单", "接单", "立即抢")
+        return if (custom.isNotEmpty()) listOf(custom) else emptyList()
     }
 
     private fun probe() {
@@ -329,7 +348,7 @@ class GrabService : AccessibilityService() {
     private fun collectButtons(root: AccessibilityNodeInfo, kw: String, out: ArrayList<Rect>) {
         val nodes = root.findAccessibilityNodeInfosByText(kw) ?: return
         for (n in nodes) {
-            if (n.text?.toString() != kw) continue
+            if (!containsWord(n.text, kw)) continue
             if (!n.isVisibleToUser) continue
             val r = Rect()
             n.getBoundsInScreen(r)
@@ -438,6 +457,7 @@ class GrabService : AccessibilityService() {
         }
     }
 
+    /** C5 锁死：三点散点 · 安全边距20%内取点，单点永不出现 */
     private fun clickRect(r: Rect) {
         val insetX = (r.width() * 0.2f).toInt().coerceAtLeast(1)
         val insetY = (r.height() * 0.2f).toInt().coerceAtLeast(1)
