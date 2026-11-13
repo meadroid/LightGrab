@@ -73,7 +73,6 @@ class MainActivity : AppCompatActivity() {
         }
         btnArsenal.setOnClickListener { showArsenalMenu() }
         btnMain.setOnClickListener {
-            // 【修复1】先查服务死活，再查无障碍开关
             if (GrabService.instance == null) {
                 Toast.makeText(this, "无障碍服务未连接！去 设置→辅助功能 重新打开轻点", Toast.LENGTH_LONG).show()
                 startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
@@ -81,6 +80,7 @@ class MainActivity : AppCompatActivity() {
             }
             running = !running
             GrabService.isRunning = running
+            // 切换时清探针的角标计数，避免旧数残留导致误判
             log(if (running) "开启监听 · ${MODE_NAMES[GrabService.currentMode.coerceIn(0, 3)]}模式" else "已停止监听")
             updateMainBtn()
             refreshStatus()
@@ -97,7 +97,7 @@ class MainActivity : AppCompatActivity() {
         } else {
             setMode(sp.getInt("mode", MODE_SHADOW).coerceIn(0, 3))
         }
-        log("轻点已启动 · 精简版")
+        log("轻点已启动 · 边缘丝带版")
         tvStatus.post(refresh)
     }
 
