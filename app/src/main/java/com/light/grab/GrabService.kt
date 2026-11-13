@@ -274,7 +274,7 @@ class GrabService : AccessibilityService() {
                 ) regrabAndClick(kw)
             }, delay)
         } finally {
-            // 修复5：rootInActiveWindow 禁止 recycle，移除
+            // rootInActiveWindow 禁止 recycle
         }
     }
 
@@ -389,11 +389,9 @@ class GrabService : AccessibilityService() {
     /**
      * 只扫最右2列，一趟完成 位置+颜色+形状：
      * 连续橙行 ≥ MIN_RUN 算一个丝带角标，返回角标总数。
-     * 价格/按钮/阴影碰不到最右列，天然排除。
      */
     private fun countBadges(src: Bitmap): Int {
         return try {
-            // 硬件位图不能直接 getPixel，先拷成软位图
             val soft = src.copy(Bitmap.Config.ARGB_8888, false) ?: return 0
             val w = soft.width
             val h = soft.height
@@ -412,7 +410,6 @@ class GrabService : AccessibilityService() {
                     run = 0
                 }
             }
-            // 收尾：橙段卡在屏幕底边没有被截断的情况
             if (run > maxRun) maxRun = run
             if (run >= MIN_RUN) count++
             soft.recycle()
@@ -424,35 +421,60 @@ class GrabService : AccessibilityService() {
         }
     }
 
-    /** 消抖：连续2帧相同才认账，防单帧闪断吞掉吹哨 */
-@Volatile private var pendingCount = -1
+    /** 终版：增单当帧响，减单两帧确认，冷却欠账补哨，抢单销账 */
+    @Volatile private var pendingLow = -1
+    @Volatile private var owedCount = 0
 
-private fun onProbeResult(count: Int) {
-    if (count != pendingCount) {
-        pendingCount = count
-        return
-    }
-    pendingCount = -1
-    if (currentMode == MainActivity.MODE_SILENT) return
-    if (count > lastBadgeCount) {
-        val now = SystemClock.elapsedRealtime()
-        if (now - lastRing > 10000) {
-            lastRing = now
-            when (currentMode) {
-                MainActivity.MODE_SHADOW ->
-                    log("[影子·探针] 新单！角标 $lastBadgeCount → $count，响铃验证")
-                MainActivity.MODE_SENTRY ->
-                    log("[哨兵·探针] 新单！角标 $lastBadgeCount → $count，吹哨")
+    private fun onProbeResult(count: Int) {
+        if (currentMode == MainActivity.MODE_SILENT) return
+
+        // ── 增单：当帧吹哨，绝不等待 ──
+        if (count > lastBadgeCount) {
+            pendingLow = -1
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastRing > 10000) {
+                lastRing = now
+                owedCount = 0
+                when (currentMode) {
+                    MainActivity.MODE_SHADOW ->
+                        log("[影子·探针] 新单！角标 $lastBadgeCount → $count，响铃验证")
+                    MainActivity.MODE_SENTRY ->
+                        log("[哨兵·探针] 新单！角标 $lastBadgeCount → $count，吹哨")
+                }
+                playAlert()
+            } else {
+                if (count > owedCount) owedCount = count
+                log("[探针] 角标 $lastBadgeCount → $count，冷却中，记账待补哨")
             }
-            playAlert()
-        } else {
-            log("[探针] 角标 $lastBadgeCount → $count，冷却中不重复响")
+            lastBadgeCount = count
+            return
         }
-    } else if (count < lastBadgeCount) {
-        log("[探针] 角标 $lastBadgeCount → $count，单被抢/滑走，静默更新")
+
+        // ── 减单：两帧一致才认账（闪断一帧不算）──
+        if (count < lastBadgeCount) {
+            if (count != pendingLow) {
+                pendingLow = count
+            } else {
+                pendingLow = -1
+                owedCount = 0
+                log("[探针] 角标 $lastBadgeCount → $count，单被抢/滑走，静默更新")
+                lastBadgeCount = count
+            }
+            return
+        }
+
+        // ── 不变：清算欠账 ──
+        pendingLow = -1
+        if (owedCount > 0 && count >= owedCount) {
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastRing > 10000) {
+                lastRing = now
+                owedCount = 0
+                log("[哨兵·探针] 冷却结束，欠账补哨（角标=$count）")
+                playAlert()
+            }
+        }
     }
-    lastBadgeCount = count
-}
 
     private fun playAlert() {
         try {
@@ -494,7 +516,7 @@ private fun onProbeResult(count: Int) {
     }
 
     /**
-     * 修复3：散点点击 + 真实回执。
+     * 散点点击 + 真实回执。
      * onCompleted 才记命中，onCancelled 明确报错——日志不再说谎。
      */
     private fun clickRect(r: Rect) {
