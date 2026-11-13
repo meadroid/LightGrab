@@ -1,11 +1,14 @@
 package com.light.grab
 
+import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.content.res.ColorStateList
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.text.InputType
@@ -33,6 +36,7 @@ class MainActivity : AppCompatActivity() {
             R.id.chipShadow, R.id.chipSentry,
             R.id.chipSniper, R.id.chipSilent
         )
+        private const val REQ_NOTI = 9001
     }
 
     private lateinit var sp: SharedPreferences
@@ -46,6 +50,7 @@ class MainActivity : AppCompatActivity() {
 
     private val refresh = object : Runnable {
         override fun run() {
+            if (isFinishing || isDestroyed) return   // 退出页面就停表
             refreshStatus()
             syncServiceLogs()
             tvStatus.postDelayed(this, 1000)
@@ -72,7 +77,7 @@ class MainActivity : AppCompatActivity() {
             } else {
                 running = !running
                 GrabService.isRunning = running
-                log(if (running) "开启监听 · ${MODE_NAMES[GrabService.currentMode]}模式" else "已停止监听")
+                log(if (running) "开启监听 · ${MODE_NAMES[GrabService.currentMode.coerceIn(0, 3)]}模式" else "已停止监听")
                 updateMainBtn()
                 refreshStatus()
             }
@@ -85,12 +90,37 @@ class MainActivity : AppCompatActivity() {
         running = GrabService.isRunning
         updateMainBtn()
         if (GrabService.instance != null) {
-            setMode(GrabService.currentMode)
+            setMode(GrabService.currentMode.coerceIn(0, 3))
         } else {
-            setMode(sp.getInt("mode", MODE_SHADOW))
+            setMode(sp.getInt("mode", MODE_SHADOW).coerceIn(0, 3))
         }
+        askNotificationPermission()   // Android 13+ 通知运行时权限
         log("轻点已启动 · 精简版")
         tvStatus.post(refresh)
+    }
+
+    /** Android 13+ 必须拿到通知权限，前台常驻通知才肯露脸 */
+    private fun askNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= 33) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
+                != PackageManager.PERMISSION_GRANTED
+            ) {
+                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_NOTI)
+            }
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int, permissions: Array<out String>, grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQ_NOTI) {
+            if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+                GrabService.instance?.onModeChanged()   // 拿到权限立刻补挂常驻通知
+            } else {
+                Toast.makeText(this, "未授权通知：常驻通知将不显示，但监听仍可运行", Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     private fun showArsenalMenu() {
@@ -110,11 +140,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setMode(mode: Int) {
-        GrabService.currentMode = mode
-        sp.edit().putInt("mode", mode).apply()
+        val m = mode.coerceIn(0, 3)   // 护栏：越界一律拉回
+        GrabService.currentMode = m
+        sp.edit().putInt("mode", m).apply()
         CHIP_IDS.forEachIndexed { index, id ->
             val chip = findViewById<TextView>(id)
-            if (index == mode) {
+            if (index == m) {
                 chip.setBackgroundResource(R.color.mint)
                 chip.setTextColor(ContextCompat.getColor(this, R.color.mintTextOn))
             } else {
@@ -124,12 +155,12 @@ class MainActivity : AppCompatActivity() {
         }
         GrabService.instance?.onModeChanged()
         refreshStatus()
-        log("模式切换 → ${MODE_NAMES[mode]}")
+        log("模式切换 → ${MODE_NAMES[m]}")
         syncServiceLogs()   // 切模式立即换日志池
     }
 
     private fun refreshStatus() {
-        val modeName = MODE_NAMES[GrabService.currentMode]
+        val modeName = MODE_NAMES[GrabService.currentMode.coerceIn(0, 3)]
         val day = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.CHINA)
             .format(java.util.Date())
         val today = sp.getInt("hit_$day", 0)
@@ -148,9 +179,10 @@ class MainActivity : AppCompatActivity() {
 
     /** 显示当前模式的日志池 */
     private fun syncServiceLogs() {
-        val m = GrabService.currentMode
+        val m = GrabService.currentMode.coerceIn(0, 3)
         val svc = sp.getString("logs_m$m", "") ?: ""
         runOnUiThread {
+            if (isFinishing || isDestroyed) return@runOnUiThread
             val local = logBuf.toString()
             tvLog.text = if (local.isEmpty()) svc else "$local\n──── 服务日志 ────\n$svc"
             logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
