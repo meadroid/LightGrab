@@ -3,9 +3,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- Android 11+ 查看全部已安装应用 -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
     <application
         android:allowBackup="true"
@@ -26,7 +24,7 @@
             android:name=".GrabService"
             android:exported="false"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
-            android:foregroundServiceType="specialUse|mediaProjection">
+            android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="grab_assist" />
@@ -37,6 +35,5 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/service_config" />
         </service>
-        <!-- 声音哨兵已并入 GrabService（AudioPlaybackCallback），通知监听服务退役 -->
     </application>
 </manifest>
