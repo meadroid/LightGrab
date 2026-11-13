@@ -47,6 +47,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnArsenal: TextView
     private val logBuf = StringBuilder()
     private var running = false
+    private var notiAsked = false   // 防重复弹权限框
 
     private val refresh = object : Runnable {
         override fun run() {
@@ -61,7 +62,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         sp = getSharedPreferences("lightdot", Context.MODE_PRIVATE)
-        showLastCrash()   // 黑匣子回放：上次崩了先交代
+        showLastCrash()
         tvLog = findViewById(R.id.tvLog)
         tvStatus = findViewById(R.id.tvStatus)
         logScroll = findViewById(R.id.logScroll)
@@ -95,32 +96,20 @@ class MainActivity : AppCompatActivity() {
         } else {
             setMode(sp.getInt("mode", MODE_SHADOW).coerceIn(0, 3))
         }
-        askNotificationPermission()
         log("轻点已启动 · 精简版")
         tvStatus.post(refresh)
     }
 
-    /** 上次崩溃全文：弹窗展示，可复制，看完清除 */
-    private fun showLastCrash() {
-        val crash = sp.getString("last_crash", null) ?: return
-        sp.edit().remove("last_crash").apply()
-        AlertDialog.Builder(this)
-            .setTitle("检测到上次崩溃")
-            .setMessage(crash)
-            .setPositiveButton("复制全文") { _, _ ->
-                val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                cm.setPrimaryClip(ClipData.newPlainText("crash", crash))
-                Toast.makeText(this, "已复制，发给开发者", Toast.LENGTH_SHORT).show()
-            }
-            .setNegativeButton("关闭", null)
-            .show()
-    }
-
-    private fun askNotificationPermission() {
+    override fun onResume() {
+        super.onResume()
+        // 每次回到前台：没批权限就申请一次；批准了就让服务立刻补挂通知
         if (Build.VERSION.SDK_INT >= 33) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
-                != PackageManager.PERMISSION_GRANTED
+                == PackageManager.PERMISSION_GRANTED
             ) {
+                if (notiAsked) GrabService.instance?.onModeChanged()   // 刚批准 → 补挂
+            } else if (!notiAsked) {
+                notiAsked = true
                 requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_NOTI)
             }
         }
@@ -133,10 +122,30 @@ class MainActivity : AppCompatActivity() {
         if (requestCode == REQ_NOTI) {
             if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
                 GrabService.instance?.onModeChanged()
+                Toast.makeText(this, "通知权限已批，常驻通知补挂中", Toast.LENGTH_SHORT).show()
             } else {
-                Toast.makeText(this, "未授权通知：常驻通知将不显示，但监听仍可运行", Toast.LENGTH_LONG).show()
+                Toast.makeText(
+                    this,
+                    "未授权通知：请去 设置→应用→轻点→通知 打开开关，否则常驻通知不显示",
+                    Toast.LENGTH_LONG
+                ).show()
             }
         }
+    }
+
+    private fun showLastCrash() {
+        val crash = sp.getString("last_crash", null) ?: return
+        sp.edit().remove("last_crash").apply()
+        AlertDialog.Builder(this)
+            .setTitle("检测到上次崩溃")
+            .setMessage(crash)
+            .setPositiveButton("复制全文") { _, _ ->
+                val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                cm.setPrimaryClip(ClipData.newPlainText("crash", crash))
+                Toast.makeText(this, "已复制", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("关闭", null)
+            .show()
     }
 
     private fun showArsenalMenu() {
@@ -261,7 +270,7 @@ class MainActivity : AppCompatActivity() {
             inputType = InputType.TYPE_CLASS_TEXT
             setText(sp.getString("feature_word", ""))
             setSingleLine(true)
-            hint = "如：必达单 / 立即上门单，留空=不过滤"
+            hint = "如：立即上门单，留空=不过滤"
         }
         AlertDialog.Builder(this)
             .setTitle("特征词（弹窗里必须出现的字，多个用逗号隔开）")
