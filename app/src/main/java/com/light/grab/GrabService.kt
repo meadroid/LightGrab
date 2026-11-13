@@ -432,7 +432,7 @@ class GrabService : AccessibilityService() {
         if (count > lastBadgeCount) {
             pendingLow = -1
             val now = SystemClock.elapsedRealtime()
-            if (now - lastRing > 10000) {
+            if (now - lastRing > 6000) {
                 lastRing = now
                 owedCount = 0
                 when (currentMode) {
