@@ -9,6 +9,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Path
 import android.graphics.Rect
@@ -57,42 +58,81 @@ class GrabService : AccessibilityService() {
         @Volatile var instance: GrabService? = null
     }
 
-    private val sp: SharedPreferences by lazy {
-        getSharedPreferences("lightdot", Context.MODE_PRIVATE)
-    }
+    private lateinit var sp: SharedPreferences
     private val handler = Handler(Looper.getMainLooper())
-    private val pools = Array(4) { LogPool(sp, "logs_m$it") }
-    private val flushTask = Runnable { pools.forEach { it.flushIfDirty() } }
+    private lateinit var pools: Array<LogPool>
+    private val flushTask = Runnable { try { pools.forEach { it.flushIfDirty() } } catch (_: Exception) {} }
 
-    private var lastFire = 0L        // 弹窗确认冷却
-    private var lastRing = 0L        // 响铃冷却
-    @Volatile private var newSeen = false   // 角标去重：同一批新单只叫一次
-    @Volatile private var probeBusy = false // 探针串行闸门
+    private var lastFire = 0L
+    private var lastRing = 0L
+    private var notiRetry = 0
+    @Volatile private var newSeen = false
+    @Volatile private var probeBusy = false
 
-    /** 越界模式号一律拉回影子（老配置兼容护栏） */
     private fun safeLogIndex(): Int = currentMode.coerceIn(0, 3)
 
-    // ============ 生命周期 ============
+    private fun notiGranted(): Boolean =
+        Build.VERSION.SDK_INT < 33 ||
+        checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+
+    override fun onCreate() {
+        super.onCreate()
+        try {
+            sp = getSharedPreferences("lightdot", Context.MODE_PRIVATE)
+            pools = Array(4) { LogPool(sp, "logs_m$it") }
+        } catch (e: Exception) {
+            android.util.Log.e("LightGrab", "init fail", e)
+        }
+    }
+
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
         try {
-            startFg()
-        } catch (e: Exception) {
-            android.util.Log.e("LightGrab", "startFg fail", e)
-        }
-        try {
-            currentMode = sp.getInt("mode", MainActivity.MODE_SHADOW)
-                .coerceIn(0, 3)   // 老配置毒值护栏
+            currentMode = sp.getInt("mode", MainActivity.MODE_SHADOW).coerceIn(0, 3)
         } catch (_: Exception) {
             currentMode = MainActivity.MODE_SHADOW
         }
         log("[服务] 已连接 · 精简版，模式=${MainActivity.MODE_NAMES[safeLogIndex()]}")
+        mountNotification()
+    }
+
+    private fun mountNotification() {
+        try {
+            if (!notiGranted()) {
+                log("[通知] 权限未批：去设置→应用→轻点→通知，打开开关")
+                return
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val nm = getSystemService(NotificationManager::class.java)
+                nm.createNotificationChannel(
+                    NotificationChannel(CHANNEL_ID, "轻点前台服务", NotificationManager.IMPORTANCE_LOW)
+                )
+            }
+            startForeground(NOTI_ID, buildNotification())
+            notiRetry = 0
+            log("[通知] 常驻通知已挂载")
+        } catch (e: Exception) {
+            if (notiRetry < 3) {
+                notiRetry++
+                log("[通知] 挂载失败，3秒后重试($notiRetry/3): ${e.message}")
+                handler.postDelayed({ mountNotification() }, 3000)
+            } else {
+                log("[通知] 三次重试均失败(不影响监听): ${e.message}")
+            }
+        }
+    }
+
+    fun onModeChanged() {
+        try { mountNotification() } catch (_: Exception) {}
     }
 
     override fun onDestroy() {
-        handler.removeCallbacksAndMessages(null)
-        try { pools.forEach { it.flushIfDirty() } } catch (_: Exception) {}
+        try {
+            handler.removeCallbacksAndMessages(null)
+            if (::pools.isInitialized) pools.forEach { it.flushIfDirty() }
+        } catch (_: Exception) {}
         instance = null
         super.onDestroy()
     }
@@ -101,11 +141,10 @@ class GrabService : AccessibilityService() {
         log("[服务] 被中断")
     }
 
-    // ============ 唯一入口：系统喂事件 ============
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         event ?: return
         if (!isRunning) return
-        if (currentMode == MainActivity.MODE_SILENT) return  // 静默：微秒级return
+        if (currentMode == MainActivity.MODE_SILENT) return
         try {
             val t = event.eventType
             if (t != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
@@ -116,17 +155,15 @@ class GrabService : AccessibilityService() {
             val target = sp.getString("app_pkg", null)
             if (target != null && pkg != target) return
 
-            popupValve()   // 弹窗阀门：全软件唯一自动点击点
-            probe()        // 像素探针：发现"新"角标 → 响铃
+            popupValve()
+            probe()
         } catch (e: Exception) {
             android.util.Log.e("LightGrab", "event", e)
         }
     }
 
-    // ============ 弹窗阀门（两关：关键词按钮 → 特征词） ============
     private fun popupValve() {
-        val kw = sp.getString("keyword", "")?.trim().orEmpty()
-            .ifEmpty { "确认抢单" }        // 关键词：弹窗按钮上的字，留空走默认
+        val kw = sp.getString("keyword", "")?.trim().orEmpty().ifEmpty { "确认抢单" }
         val root = rootInActiveWindow ?: return
         val btnRect = Rect()
         val found = findExactButton(root, kw, btnRect)
@@ -138,7 +175,7 @@ class GrabService : AccessibilityService() {
             return
         }
         val now = System.currentTimeMillis()
-        if (now - lastFire < 1500) return   // 冷却：不连点
+        if (now - lastFire < 1500) return
         lastFire = now
 
         val (minD, maxD) = delayRange()
@@ -156,7 +193,6 @@ class GrabService : AccessibilityService() {
         }, delay)
     }
 
-    /** 精确文本匹配 + 可见 + 屏幕内，输出按钮区域 */
     private fun findExactButton(root: AccessibilityNodeInfo, kw: String, out: Rect): Boolean {
         val candidates = root.findAccessibilityNodeInfosByText(kw) ?: return false
         for (c in candidates) {
@@ -174,7 +210,6 @@ class GrabService : AccessibilityService() {
         return false
     }
 
-    /** 特征词阀门：按钮上方必须出现特征词之一，留空=不过滤 */
     private fun checkFeatureWord(root: AccessibilityNodeInfo, btnRect: Rect): Boolean {
         val feature = sp.getString("feature_word", "")?.trim().orEmpty()
         if (feature.isEmpty()) return true
@@ -196,7 +231,6 @@ class GrabService : AccessibilityService() {
         return false
     }
 
-    /** 延时区间（出口强制 max≥min：旧配置倒挂值到此归位，nextLong 不再炸） */
     private fun delayRange(): Pair<Int, Int> {
         val (lo, hi) = if (currentMode == MainActivity.MODE_SNIPER)
             sp.getInt("sniper_delay_min", 0) to sp.getInt("sniper_delay_max", 200)
@@ -207,7 +241,6 @@ class GrabService : AccessibilityService() {
         return min to max
     }
 
-    // ============ 像素探针：找"新"角标 ============
     private fun grabKeywords(): List<String> {
         val custom = sp.getString("keyword", "")?.trim().orEmpty()
         return if (custom.isNotEmpty()) listOf(custom)
@@ -217,7 +250,6 @@ class GrabService : AccessibilityService() {
     private fun probe() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
         if (probeBusy) return
-        // 节点树闸门：屏幕上没有抢单按钮，一步都不走（连截图都省）
         val root = rootInActiveWindow ?: return
         val rects = ArrayList<Rect>()
         for (kw in grabKeywords()) collectButtons(root, kw, rects)
@@ -245,7 +277,6 @@ class GrabService : AccessibilityService() {
                 }
             })
         } catch (e: Exception) {
-            // 个别机型截图权限异常：绝不漏出异常炸服务
             probeBusy = false
             log("[探针] 截图调用异常: ${e.message}")
         }
@@ -262,7 +293,6 @@ class GrabService : AccessibilityService() {
         }
     }
 
-    /** 数橙红像素（排除抢单按钮区域），命中≥40个 = 有"新"角标 */
     private fun countBadge(src: Bitmap, exclude: List<Rect>): Boolean {
         return try {
             val soft = src.copy(Bitmap.Config.ARGB_8888, false) ?: return false
@@ -321,11 +351,10 @@ class GrabService : AccessibilityService() {
                 }
             }
         } else {
-            newSeen = false   // 角标消失，下次出现再叫
+            newSeen = false
         }
     }
 
-    // ============ 响铃 ============
     private fun playAlert() {
         try {
             val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -365,7 +394,6 @@ class GrabService : AccessibilityService() {
         }
     }
 
-    // ============ 点击 ============
     private fun clickRect(r: Rect) {
         val insetX = (r.width() * 0.2f).toInt().coerceAtLeast(1)
         val insetY = (r.height() * 0.2f).toInt().coerceAtLeast(1)
@@ -393,7 +421,6 @@ class GrabService : AccessibilityService() {
             .apply()
     }
 
-    // ============ 前台通知（一处定义，两处调用） ============
     private fun buildNotification(): Notification {
         val pi = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java),
@@ -408,26 +435,6 @@ class GrabService : AccessibilityService() {
             .build()
     }
 
-    private fun startFg() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-        try {
-            val nm = getSystemService(NotificationManager::class.java)
-            nm.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "轻点前台服务", NotificationManager.IMPORTANCE_LOW)
-            )
-        } catch (_: Exception) {}
-        // 建渠道和挂前台分步容错：渠道失败不拖累前台
-        startForeground(NOTI_ID, buildNotification())
-    }
-
-    fun onModeChanged() {
-        try {
-            getSystemService(NotificationManager::class.java)
-                .notify(NOTI_ID, buildNotification())
-        } catch (_: Exception) {}
-    }
-
-    // ============ 日志：路由到当前模式池 + 攒批落盘 ============
     private fun log(msg: String) {
         android.util.Log.d("LightGrab", msg)
         try {
