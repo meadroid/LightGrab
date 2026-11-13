@@ -47,7 +47,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnArsenal: TextView
     private val logBuf = StringBuilder()
     private var running = false
-    private var notiAsked = false   // 防重复弹权限框
+    private var notiAsked = false
 
     private val refresh = object : Runnable {
         override fun run() {
@@ -73,16 +73,17 @@ class MainActivity : AppCompatActivity() {
         }
         btnArsenal.setOnClickListener { showArsenalMenu() }
         btnMain.setOnClickListener {
-            if (!isAccOn()) {
-                Toast.makeText(this, "请先开启无障碍权限", Toast.LENGTH_LONG).show()
+            // 【修复1】先查服务死活，再查无障碍开关
+            if (GrabService.instance == null) {
+                Toast.makeText(this, "无障碍服务未连接！去 设置→辅助功能 重新打开轻点", Toast.LENGTH_LONG).show()
                 startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-            } else {
-                running = !running
-                GrabService.isRunning = running
-                log(if (running) "开启监听 · ${MODE_NAMES[GrabService.currentMode.coerceIn(0, 3)]}模式" else "已停止监听")
-                updateMainBtn()
-                refreshStatus()
+                return@setOnClickListener
             }
+            running = !running
+            GrabService.isRunning = running
+            log(if (running) "开启监听 · ${MODE_NAMES[GrabService.currentMode.coerceIn(0, 3)]}模式" else "已停止监听")
+            updateMainBtn()
+            refreshStatus()
         }
         findViewById<TextView>(R.id.btnCopyLog).setOnClickListener {
             val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -102,12 +103,11 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        // 每次回到前台：没批权限就申请一次；批准了就让服务立刻补挂通知
         if (Build.VERSION.SDK_INT >= 33) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
                 == PackageManager.PERMISSION_GRANTED
             ) {
-                if (notiAsked) GrabService.instance?.onModeChanged()   // 刚批准 → 补挂
+                if (notiAsked) GrabService.instance?.onModeChanged()
             } else if (!notiAsked) {
                 notiAsked = true
                 requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_NOTI)
@@ -195,7 +195,7 @@ class MainActivity : AppCompatActivity() {
             java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.CHINA)
                 .format(java.util.Date(last))
         else "无"
-        val line1 = if (running && isAccOn()) "♟️ 模式：${modeName} 运行中"
+        val line1 = if (running && GrabService.instance != null) "♟️ 模式：${modeName} 运行中"
                      else "♟️ 模式：${modeName} 待启动"
         val line2 = "🕐 今日：命中 $today 发  $lastStr"
         val line3 = "🏆 累计：命中 $total 发"
@@ -211,13 +211,6 @@ class MainActivity : AppCompatActivity() {
             tvLog.text = if (local.isEmpty()) svc else "$local\n──── 服务日志 ────\n$svc"
             logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
         }
-    }
-
-    private fun isAccOn(): Boolean {
-        val enabled = Settings.Secure.getString(
-            contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        ) ?: return false
-        return enabled.contains(packageName)
     }
 
     private fun log(msg: String) {
