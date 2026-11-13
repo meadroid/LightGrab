@@ -424,28 +424,35 @@ class GrabService : AccessibilityService() {
         }
     }
 
-    /** 修复1：数字比对——角标数涨了就响，少了静默更新 */
-    private fun onProbeResult(count: Int) {
-        if (currentMode == MainActivity.MODE_SILENT) return
-        if (count > lastBadgeCount) {
-            val now = SystemClock.elapsedRealtime()
-            if (now - lastRing > 10000) {
-                lastRing = now
-                when (currentMode) {
-                    MainActivity.MODE_SHADOW ->
-                        log("[影子·探针] 新单！角标 $lastBadgeCount → $count，响铃验证")
-                    MainActivity.MODE_SENTRY ->
-                        log("[哨兵·探针] 新单！角标 $lastBadgeCount → $count，吹哨")
-                }
-                playAlert()
-            } else {
-                log("[探针] 角标 $lastBadgeCount → $count，冷却中不重复响")
-            }
-        } else if (count < lastBadgeCount) {
-            log("[探针] 角标 $lastBadgeCount → $count，单被抢/滑走，静默更新")
-        }
-        lastBadgeCount = count
+    /** 消抖：连续2帧相同才认账，防单帧闪断吞掉吹哨 */
+@Volatile private var pendingCount = -1
+
+private fun onProbeResult(count: Int) {
+    if (count != pendingCount) {
+        pendingCount = count
+        return
     }
+    pendingCount = -1
+    if (currentMode == MainActivity.MODE_SILENT) return
+    if (count > lastBadgeCount) {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastRing > 10000) {
+            lastRing = now
+            when (currentMode) {
+                MainActivity.MODE_SHADOW ->
+                    log("[影子·探针] 新单！角标 $lastBadgeCount → $count，响铃验证")
+                MainActivity.MODE_SENTRY ->
+                    log("[哨兵·探针] 新单！角标 $lastBadgeCount → $count，吹哨")
+            }
+            playAlert()
+        } else {
+            log("[探针] 角标 $lastBadgeCount → $count，冷却中不重复响")
+        }
+    } else if (count < lastBadgeCount) {
+        log("[探针] 角标 $lastBadgeCount → $count，单被抢/滑走，静默更新")
+    }
+    lastBadgeCount = count
+}
 
     private fun playAlert() {
         try {
