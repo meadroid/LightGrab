@@ -68,6 +68,7 @@ class GrabService : AccessibilityService() {
     private var lastFire = 0L
     private var lastRing = 0L
     private var lastProbe = 0L
+    private var lastValve = 0L
     private var notiRetry = 0
     @Volatile private var newSeen = false
     @Volatile private var probeBusy = false
@@ -190,22 +191,24 @@ class GrabService : AccessibilityService() {
 
     /**
      * 门卫流程（哨兵/狙击/影子共享，B2）：
-     * ①特征词先行 → 不符一行日志蹲守，关键词不看；
+     * ①特征词先行 → 不符闭嘴蹲守（不写日志）；
      * ②相符进门只查关键词 → 未命中纯静默（B4）；
      * ③核对特征词与按钮位置；
      * ④1500ms防重 → 随机延时 → 重取最新坐标散点点击。
      * 只搜焦点窗口（A3），不扫全窗口不递归。
      */
     private fun popupValve() {
+        val nowMs = System.currentTimeMillis()
+        if (nowMs - lastValve < 300) return   // 300ms 内重复事件直接忽略
+        lastValve = nowMs
         val root = rootInActiveWindow ?: return
         try {
-            // ① 门卫：特征词先行
+            // ① 门卫：特征词先行 —— 不符就闭嘴蹲守，一声不吭
             val words = featureWords()
             var featureRect: Rect? = null
             if (words.isNotEmpty()) {
                 featureRect = findFeatureRect(root, words)
                 if (featureRect == null) {
-                    log("[阀门] 特征词不符")   // B3：就这一行，不刷屏
                     return
                 }
             }
@@ -215,16 +218,15 @@ class GrabService : AccessibilityService() {
             if (kw.isEmpty()) return
             val btnRect = findButtonRect(root, kw) ?: return
 
-            // ③ 位置核对：特征词须在按钮上方240dp内、横向有交叠
+            // ③ 位置核对：不符也闭嘴蹲守
             if (featureRect != null && !featureAboveButton(featureRect, btnRect)) {
-                log("[阀门] 特征词不符")
                 return
             }
 
             // ④ 防重窗口
-            val now = System.currentTimeMillis()
-            if (now - lastFire < 1500) return
-            lastFire = now
+            val fire = System.currentTimeMillis()
+            if (fire - lastFire < 1500) return
+            lastFire = fire
 
             val (minD, maxD) = delayRange()
             val delay = Random.nextLong(minD.toLong(), maxD.toLong() + 1)
@@ -429,7 +431,6 @@ class GrabService : AccessibilityService() {
                         }
                     }
                 }
-                // 狙击：不响（自己刷界面），此处事件到不了（probe已挡）
             }
         } else {
             newSeen = false
