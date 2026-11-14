@@ -39,7 +39,7 @@ class MainActivity : Activity() {
     // 色板
     private val ink = -0x22181F1F      // 前景文字
     private val grayText = -0x755C6D71
-    private val mint = -0x85B94E2A
+    private val mint = -0x85B94E2A.toInt()
     private val chipBg = -0xF0E6ECDD.toInt()
 
     override fun onCreate(b: Bundle?) {
