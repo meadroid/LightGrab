@@ -1,43 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.LightGrab" parent="Theme.AppCompat.DayNight.NoActionBar">
-        <item name="colorPrimary">@color/mint</item>
-        <item name="colorAccent">@color/mint</item>
+    <style name="Theme.LightGrab" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:colorPrimary">@color/mint</item>
+        <item name="android:colorAccent">@color/mint</item>
         <item name="android:windowBackground">@color/bgDark</item>
-    </style>
-
-    <style name="Chip">
-        <item name="android:layout_width">0dp</item>
-        <item name="android:layout_height">32dp</item>
-        <item name="android:layout_weight">1</item>
-        <item name="android:layout_marginEnd">6dp</item>
-        <item name="android:gravity">center</item>
-        <item name="android:textSize">13sp</item>
-        <item name="android:background">@color/grayChip</item>
-        <item name="android:textColor">@color/grayText</item>
-    </style>
-
-    <style name="SettingLabel">
-        <item name="android:layout_width">match_parent</item>
-        <item name="android:layout_height">wrap_content</item>
-        <item name="android:textSize">13sp</item>
-        <item name="android:textColor">@color/grayText</item>
-        <item name="android:layout_marginTop">14dp</item>
-    </style>
-
-    <style name="SettingInput">
-        <item name="android:layout_width">match_parent</item>
-        <item name="android:layout_height">wrap_content</item>
-        <item name="android:textSize">14sp</item>
-        <item name="android:textColor">@color/ink</item>
-        <item name="android:layout_marginTop">4dp</item>
-    </style>
-
-    <style name="SettingPerm">
-        <item name="android:layout_width">match_parent</item>
-        <item name="android:layout_height">wrap_content</item>
-        <item name="android:textSize">13sp</item>
-        <item name="android:textColor">@color/grayText</item>
-        <item name="android:layout_marginTop">6dp</item>
+        <item name="android:statusBarColor">@color/bgDark</item>
     </style>
 </resources>
