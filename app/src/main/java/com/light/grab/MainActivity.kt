@@ -39,7 +39,6 @@ class MainActivity : Activity() {
         try {
             build()
         } catch (e: Throwable) {
-            // 自诊断：崩溃原因直接弹屏
             AlertDialog.Builder(this)
                 .setTitle("启动失败·原因")
                 .setMessage(e.toString())
@@ -94,7 +93,8 @@ class MainActivity : Activity() {
 
         stateMode = TextView(this).apply { text = "♟ 模式：影子 待启动"; textSize = 16f }
         stateToday = TextView(this).apply { text = "🕐 今日：命中 ${GrabService.hit} 发"; textSize = 16f }
-        stateLock = TextView(this).apply { textSize = 16f; refreshLock() }
+        stateLock = TextView(this).apply { textSize = 16f }
+        refreshLock()
         logBox = TextView(this).apply {
             textSize = 12f
             setPadding(20, 20, 20, 20)
@@ -168,7 +168,7 @@ class MainActivity : Activity() {
                 startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
                     Uri.parse("package:$packageName")))
             }
-        } catch (e: Exception) { /* ROM 不支持则跳过 */ }
+        } catch (e: Exception) { }
     }
 
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
