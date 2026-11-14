@@ -14,6 +14,18 @@
         android:title="关键词"
         app:showAsAction="never" />
     <item
+        android:id="@+id/action_lock_rect"
+        android:title="锁区词"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/action_calibration"
+        android:title="标定词"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/action_calib_help"
+        android:title="标助词"
+        app:showAsAction="never" />
+    <item
         android:id="@+id/action_ringtone"
         android:title="铃声库"
         app:showAsAction="never" />
