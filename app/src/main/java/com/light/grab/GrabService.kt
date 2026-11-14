@@ -159,5 +159,5 @@ class GrabService : AccessibilityService() {
     }
 
     private fun fmt(r: Rect) = "${r.left},${r.top},${r.width()},${r.height()}"
-    private fun log(s: String) { Log.i(TAG, s); MainActivity.pushLog(s) }
+    private fun log(s: String) { Log.i(TAG, s) }
 }
