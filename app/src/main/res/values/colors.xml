@@ -6,13 +6,13 @@
     <color name="mintBg">#12201A</color>
     <color name="mintTextOn">#FFFFFF</color>
 
-    <!-- 深色体系：和主界面统一 -->
+    <!-- 深色体系 -->
     <color name="grayChip">#1E2A24</color>
     <color name="grayText">#8A968F</color>
     <color name="ink">#DDE7E1</color>
     <color name="bgDark">#0E1512</color>
     <color name="logBg">#12201A</color>
 
-    <!-- 标题灰：比 grayText 深一档 -->
+    <!-- 标题灰 -->
     <color name="titleGray">#6E7A73</color>
 </resources>
