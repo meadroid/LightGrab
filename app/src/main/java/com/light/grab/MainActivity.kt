@@ -1,4 +1,4 @@
-package com.qingdan.lightclick
+package com.light.grab
 
 import android.Manifest
 import android.app.AlertDialog
