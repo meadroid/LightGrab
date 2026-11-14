@@ -61,7 +61,7 @@ class MainActivity : Activity() {
     }
 
     private fun selectMode(sel: Button, name: String) {
-        modeBtns.forEach { setTextColor(grayText) }
+        modeBtns.forEach { it.setTextColor(grayText) }
         sel.setTextColor(mint)
         stateMode.text = "♟ 模式：$name 待启动"
         log("模式切换 → $name")
