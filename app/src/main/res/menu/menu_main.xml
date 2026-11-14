@@ -3,7 +3,7 @@
     xmlns:app="http://schemas.android.com/apk/res-auto">
     <item
         android:id="@+id/action_target"
-        android:title="中标人"
+        android:title="目标应用"
         app:showAsAction="never" />
     <item
         android:id="@+id/action_feature_word"
@@ -14,31 +14,19 @@
         android:title="关键词"
         app:showAsAction="never" />
     <item
-        android:id="@+id/action_lock_rect"
-        android:title="锁区词"
-        app:showAsAction="never" />
-    <item
-        android:id="@+id/action_calibration"
-        android:title="标定词"
-        app:showAsAction="never" />
-    <item
-        android:id="@+id/action_calib_help"
-        android:title="标助词"
-        app:showAsAction="never" />
-    <item
         android:id="@+id/action_ringtone"
-        android:title="铃声库"
+        android:title="铃声"
         app:showAsAction="never" />
     <item
         android:id="@+id/action_sentry_delay"
-        android:title="哨兵岗"
+        android:title="哨兵延时"
         app:showAsAction="never" />
     <item
         android:id="@+id/action_sniper_delay"
-        android:title="狙击岗"
+        android:title="狙击延时"
         app:showAsAction="never" />
     <item
         android:id="@+id/action_permission"
-        android:title="开权限"
+        android:title="无障碍权限"
         app:showAsAction="never" />
 </menu>
