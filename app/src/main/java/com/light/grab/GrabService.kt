@@ -138,7 +138,7 @@ class GrabService : AccessibilityService() {
         val root = rootInActiveWindow ?: return
         val cnt = countBadgeCandidates(root, pkg) ?: return
         if (lastBadgeCount == -1) {
-            lastBadgeCount = cnt          // Q2：首帧只校准，不响铃
+            lastBadgeCount = cnt          // 首帧只校准，不响铃
             addLog("角标校准=$cnt")
             return
         }
@@ -332,6 +332,10 @@ class GrabService : AccessibilityService() {
             logList.add(line)
             if (logList.size > 200) logList.removeAt(0)
         }
+        // 落库到 SharedPreferences，MainActivity 才能看到
+        val key = "logs_m${currentMode.coerceIn(0, 3)}"
+        val buf = prefs.getString(key, "") ?: ""
+        prefs.edit().putString(key, "$buf\n$line".takeLast(4000)).apply()
     }
 
     fun getLogs(): String = synchronized(logList) { logList.joinToString("\n") }
