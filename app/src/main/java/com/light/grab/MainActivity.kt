@@ -12,7 +12,6 @@ import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
 import android.view.Gravity
-import android.view.View
 import android.view.accessibility.AccessibilityManager
 import android.widget.Button
 import android.widget.EditText
@@ -27,9 +26,8 @@ class MainActivity : Activity() {
     private lateinit var stateMode: TextView
     private lateinit var stateToday: TextView
     private lateinit var stateLock: TextView
-    private val logs = StringBuilder()
     private val h = Handler(Looper.getMainLooper())
-    private val tick = object : Runnable {   // 仅刷新UI数字，非保活
+    private val tick = object : Runnable {
         override fun run() {
             stateToday.text = "🕐 今日：命中 ${GrabService.hit} 发"
             h.postDelayed(this, 2000)
@@ -38,22 +36,28 @@ class MainActivity : Activity() {
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
+        try {
+            build()
+        } catch (e: Throwable) {
+            // 自诊断：崩溃原因直接弹屏
+            AlertDialog.Builder(this)
+                .setTitle("启动失败·原因")
+                .setMessage(e.toString())
+                .setPositiveButton("好", null)
+                .show()
+        }
+    }
+
+    private fun build() {
         GrabService.feature = sp.getString("feature", "立即上门单")!!
         GrabService.btnWord = sp.getString("btn", "确认抢单")!!
         GrabService.lockRect = parseLock(sp.getString("lock", "") ?: "")
 
-        buildUi()
-        h.post(tick)
-        askBattery()
-    }
-
-    private fun buildUi() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(40, 80, 40, 40)
         }
 
-        // 标题行 + 齿轮
         val titleRow = LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
             addView(TextView(this@MainActivity).apply {
@@ -64,13 +68,12 @@ class MainActivity : Activity() {
             })
         }
 
-        // 模式四选
         val modeRow = LinearLayout(this).apply {
             listOf("影子", "哨兵", "狙击", "静默").forEach { m ->
                 addView(Button(this@MainActivity).apply {
                     text = m; setOnClickListener {
                         stateMode.text = "♟ 模式：$m 待启动"
-                        toast("已选 $m（当前版本统一影子逻辑）")
+                        toast("已选 $m（当前统一影子逻辑）")
                     }
                 }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             }
@@ -106,37 +109,36 @@ class MainActivity : Activity() {
         root.addView(stateLock)
         root.addView(logBox)
         setContentView(root)
+        h.post(tick)
+        askBattery()
     }
 
     private fun refreshLock() {
         stateLock.text = "🏆 累计 ${GrabService.hit} 发  🎯锁区：" +
-            if (GrabService.lockRect != null) "已配" else "未配"
+            (if (GrabService.lockRect != null) "已配" else "未配")
     }
 
     private fun svcOn() =
         (getSystemService(ACCESSIBILITY_SERVICE) as AccessibilityManager)
-            .getEnabledAccessibilityServiceList(android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_GENERIC)
+            .getEnabledAccessibilityServiceList(
+                android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_GENERIC)
             .any { it.resolveInfo.serviceInfo.name == GrabService::class.java.name }
 
-    // ── 设置弹窗：特征词/按钮词/锁区px ──
     private fun showSettings() {
-        val ctx = this
-        val box = LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(60, 30, 60, 0)
-        }
-        fun label(s: String) = box.addView(TextView(ctx).apply { text = s })
-        val in1 = EditText(ctx).apply { setText(sp.getString("feature", "立即上门单")) }
-        val in2 = EditText(ctx).apply { setText(sp.getString("btn", "确认抢单")) }
-        val in3 = EditText(ctx).apply {
+        val in1 = EditText(this).apply { setText(sp.getString("feature", "立即上门单")) }
+        val in2 = EditText(this).apply { setText(sp.getString("btn", "确认抢单")) }
+        val in3 = EditText(this).apply {
             setText(sp.getString("lock", ""))
             hint = "px 绝对坐标 左,上,宽,高 如 565,1425,470,110"
         }
-        label("特征词"); box.addView(in1)
-        label("按钮词"); box.addView(in2)
-        label("锁区(px 屏幕绝对坐标)"); box.addView(in3)
-
-        AlertDialog.Builder(ctx)
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(60, 30, 60, 0)
+            addView(TextView(context).apply { text = "特征词" }); addView(in1)
+            addView(TextView(context).apply { text = "按钮词" }); addView(in2)
+            addView(TextView(context).apply { text = "锁区(px 屏幕绝对坐标)" }); addView(in3)
+        }
+        AlertDialog.Builder(this)
             .setTitle("设置")
             .setView(box)
             .setPositiveButton("保存") { _, _ ->
@@ -160,19 +162,14 @@ class MainActivity : Activity() {
     } catch (e: Exception) { null }
 
     private fun askBattery() {
-        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        if (!pm.isIgnoringBatteryOptimizations(packageName)) {
-            try {
+        try {
+            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
                 startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
                     Uri.parse("package:$packageName")))
-            } catch (e: Exception) { /* 部分ROM不支持，忽略 */ }
-        }
+            }
+        } catch (e: Exception) { /* ROM 不支持则跳过 */ }
     }
 
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
-
-    companion object {
-        // 服务→界面日志通道
-        fun pushLog(s: String) { /* 界面刷新由 tick 轮询统计行，日志靠Logcat */ }
-    }
 }
