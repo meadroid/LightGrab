@@ -1,27 +1,18 @@
-package com.light.grab
+package com.qingdan.lightclick
 
 import android.accessibilityservice.AccessibilityService
-import android.accessibilityservice.GestureDescription
+import android.content.Intent
+import android.media.AudioManager
+import android.media.MediaPlayer
+import android.media.RingtoneManager
+import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
-import android.content.Context
-import android.content.Intent
-import android.content.SharedPreferences
-import android.content.pm.PackageManager
-import android.graphics.Bitmap
-import android.graphics.Path
 import android.graphics.Rect
-import android.media.AudioAttributes
-import android.media.AudioManager
-import android.media.RingtoneManager
-import android.os.Build
-import android.os.Handler
-import android.os.Looper
-import android.os.PowerManager
-import android.os.SystemClock
-import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import java.text.SimpleDateFormat
@@ -29,551 +20,308 @@ import java.util.Date
 import java.util.Locale
 import kotlin.random.Random
 
-/** 日志池：每模式独立，300条滚动，攒批落盘 */
-class LogPool(private val sp: SharedPreferences, private val key: String) {
-    private val lines = ArrayDeque<String>()
-    @Volatile private var dirty = false
-
-    @Synchronized fun add(msg: String) {
-        val t = SimpleDateFormat("HH:mm:ss", Locale.CHINA).format(Date())
-        lines.addLast("$t  $msg")
-        while (lines.size > 300) lines.removeFirst()
-        dirty = true
-    }
-
-    @Synchronized fun text(): String = lines.joinToString("\n")
-
-    fun flushIfDirty() {
-        if (!dirty) return
-        dirty = false
-        try { sp.edit().putString(key, text()).apply() } catch (_: Exception) {}
-    }
-}
-
 class GrabService : AccessibilityService() {
 
     companion object {
-        const val CHANNEL_ID = "lightgrab_fg"
+        const val CHANNEL_ID = "grab_channel"
         const val NOTI_ID = 1001
-        /** 丝带角标在最右列的最小连续橙行数（真值约50，留一半余量） */
-        const val MIN_RUN = 25
-        @Volatile var currentMode: Int = MainActivity.MODE_SHADOW
-        @Volatile var isRunning: Boolean = false
         @Volatile var instance: GrabService? = null
     }
 
-    private lateinit var sp: SharedPreferences
     private val handler = Handler(Looper.getMainLooper())
-    private lateinit var pools: Array<LogPool>
-    private val flushTask = Runnable {
-        try { pools.forEach { it.flushIfDirty() } } catch (_: Exception) {}
-    }
+    private var lastFireAt = 0L
+    private var lastBadgeCount = -1
+    private var alertPlayer: MediaPlayer? = null
+    private val prefs by lazy { getSharedPreferences("qingdan", MODE_PRIVATE) }
+    private val logList = mutableListOf<String>()
+    private val sdf = SimpleDateFormat("MM-dd HH:mm:ss", Locale.CHINA)
 
-    // 冷却全部用 elapsedRealtime（改系统时间不影响）
-    private var lastFire = 0L
-    private var lastRing = 0L
-    private var lastProbe = 0L
-    private var lastValve = 0L
-    private var notiRetry = 0
-
-    /** 修复1：布尔 newSeen 换成数字比对——1单变2单也要响 */
-    @Volatile private var lastBadgeCount = 0
-    @Volatile private var probeBusy = false
-
-    private var wakeLock: PowerManager.WakeLock? = null
-
-    /** 修复4：心跳自驱循环——不依赖无障碍事件，熄屏/页面静止也照扫 */
-    private val heartbeat = object : Runnable {
-        override fun run() {
-            try {
-                val active = isRunning &&
-                    (currentMode == MainActivity.MODE_SHADOW ||
-                     currentMode == MainActivity.MODE_SENTRY)
-                holdWake(active)
-                if (active) probe()
-            } catch (_: Exception) {}
-            handler.postDelayed(this, 1000)
-        }
-    }
-
-    private fun holdWake(hold: Boolean) {
-        try {
-            if (hold) {
-                if (wakeLock == null) {
-                    val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-                    wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LightGrab:probe")
-                    wakeLock?.setReferenceCounted(false)
-                }
-                if (wakeLock?.isHeld != true) {
-                    wakeLock?.acquire(10 * 60 * 1000L) // 10分钟上限，心跳每秒续
-                }
-            } else {
-                if (wakeLock?.isHeld == true) wakeLock?.release()
-            }
-        } catch (_: Exception) {}
-    }
-
-    private fun safeLogIndex(): Int = currentMode.coerceIn(0, 3)
-
-    private fun notiGranted(): Boolean =
-        Build.VERSION.SDK_INT < 33 ||
-            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) ==
-            PackageManager.PERMISSION_GRANTED
-
-    override fun onCreate() {
-        super.onCreate()
-        try {
-            sp = getSharedPreferences("lightdot", Context.MODE_PRIVATE)
-            pools = Array(4) { LogPool(sp, "logs_m$it") }
-        } catch (e: Exception) {
-            android.util.Log.e("LightGrab", "init fail", e)
-        }
-    }
+    // ---------- 生命周期（纯事件驱动：无心跳、无定时器、无WakeLock） ----------
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        try {
-            currentMode = sp.getInt("mode", MainActivity.MODE_SHADOW).coerceIn(0, 3)
-        } catch (_: Exception) {
-            currentMode = MainActivity.MODE_SHADOW
-        }
-        log("[服务] 已连接 · 边缘丝带版，模式=${MainActivity.MODE_NAMES[safeLogIndex()]}")
-        mountNotification()
-        handler.removeCallbacks(heartbeat)
-        handler.post(heartbeat)
+        startForeground()
+        addLog("上岗。纯事件驱动体制")
     }
 
-    private fun mountNotification() {
-        try {
-            if (!notiGranted()) {
-                log("[通知] 权限未批：去设置→应用→轻点→通知，打开开关")
-                return
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                val nm = getSystemService(NotificationManager::class.java)
-                nm.createNotificationChannel(
-                    NotificationChannel(CHANNEL_ID, "轻点前台服务", NotificationManager.IMPORTANCE_LOW)
-                )
-            }
-            startForeground(NOTI_ID, buildNotification())
-            notiRetry = 0
-            log("[通知] 常驻通知已挂载")
-        } catch (e: Exception) {
-            if (notiRetry < 3) {
-                notiRetry++
-                log("[通知] 挂载失败，3秒后重试($notiRetry/3): ${e.message}")
-                handler.postDelayed({ mountNotification() }, 3000)
-            } else {
-                log("[通知] 三次重试均失败(不影响监听): ${e.message}")
-            }
-        }
-    }
-
-    fun onModeChanged() {
-        try { mountNotification() } catch (_: Exception) {}
-    }
+    override fun onInterrupt() { addLog("服务中断") }
 
     override fun onDestroy() {
-        try {
-            handler.removeCallbacksAndMessages(null)
-            holdWake(false)
-            if (::pools.isInitialized) pools.forEach { it.flushIfDirty() }
-        } catch (_: Exception) {}
         instance = null
+        handler.removeCallbacksAndMessages(null)
+        stopAlert()
         super.onDestroy()
     }
 
-    override fun onInterrupt() {
-        log("[服务] 被中断")
-    }
+    // ---------- 常驻通知 ----------
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        event ?: return
-        if (!isRunning) return
-        if (currentMode == MainActivity.MODE_SILENT) return
-        try {
-            val t = event.eventType
-            if (t != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
-                t != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
-            ) return
-            val pkg = event.packageName?.toString() ?: return
-            if (pkg == packageName) return
-            val target = sp.getString("app_pkg", null)
-            if (target != null && pkg != target) return
-
-            popupValve()
-            if (currentMode != MainActivity.MODE_SNIPER) {
-                probe()
-            }
-        } catch (e: Exception) {
-            android.util.Log.e("LightGrab", "event", e)
-        }
-    }
-
-    // ===== 匹配核心：去空白 + 完整包含 =====
-
-    private fun norm(s: String): String = s.replace(Regex("\\s+"), "")
-
-    private fun containsWord(nodeText: CharSequence?, word: String): Boolean {
-        if (nodeText == null) return false
-        val w = norm(word)
-        if (w.isEmpty()) return false
-        return norm(nodeText.toString()).contains(w)
-    }
-
-    private fun keyword(): String =
-        sp.getString("keyword", "")?.trim().orEmpty()
-
-    private fun featureWords(): List<String> =
-        sp.getString("feature_word", "")?.trim().orEmpty()
-            .split(",", "，").map { it.trim() }.filter { it.isNotEmpty() }
-
-    /**
-     * 门卫流程（哨兵/狙击/影子共享）：
-     * ①特征词先行 → 不符闭嘴蹲守；
-     * ②相符进门只查关键词 → 未命中纯静默；
-     * ③核对特征词与按钮位置；
-     * ④1500ms防重 → 随机延时 → 重取最新坐标散点点击。
-     */
-    private fun popupValve() {
-        val nowMs = SystemClock.elapsedRealtime()
-        if (nowMs - lastValve < 300) return
-        lastValve = nowMs
-        val root = rootInActiveWindow ?: return
-        try {
-            val words = featureWords()
-            var featureRect: Rect? = null
-            if (words.isNotEmpty()) {
-                featureRect = findFeatureRect(root, words)
-                if (featureRect == null) return
-            }
-
-            val kw = keyword()
-            if (kw.isEmpty()) return
-            val btnRect = findButtonRect(root, kw) ?: return
-
-            if (featureRect != null && !featureAboveButton(featureRect, btnRect)) return
-
-            val fire = SystemClock.elapsedRealtime()
-            if (fire - lastFire < 1500) return
-            lastFire = fire
-
-            val (minD, maxD) = delayRange()
-            val delay = Random.nextLong(minD.toLong(), maxD.toLong() + 1)
-
-            if (currentMode == MainActivity.MODE_SHADOW) {
-                log("[影子·试镜] 全链通过「$kw」延时${delay}ms（验证完成，不点击）")
-                return
-            }
-            log("[通过] 「$kw」延时${delay}ms后点击")
-
-            handler.postDelayed({
-                if (isRunning && currentMode != MainActivity.MODE_SHADOW &&
-                    currentMode != MainActivity.MODE_SILENT
-                ) regrabAndClick(kw)
-            }, delay)
-        } finally {
-            // rootInActiveWindow 禁止 recycle
-        }
-    }
-
-    /** 点击前重新瞄一眼，按当下最新坐标下手；瞄不到就静默放弃 */
-    private fun regrabAndClick(kw: String) {
-        val root = rootInActiveWindow ?: run {
-            log("[命中] 点击前取窗口失败，放弃")
-            return
-        }
-        try {
-            val rect = findButtonRect(root, kw) ?: run {
-                log("[命中] 点击前重瞄未找到「$kw」，放弃")
-                return
-            }
-            log("[命中] 重瞄成功 ($rect)，下手")
-            clickRect(rect)
-        } finally {
-        }
-    }
-
-    private fun findButtonRect(root: AccessibilityNodeInfo, kw: String): Rect? {
-        val candidates = root.findAccessibilityNodeInfosByText(kw) ?: return null
-        for (c in candidates) {
-            if (!containsWord(c.text, kw)) continue
-            if (!c.isVisibleToUser) continue
-            val r = Rect()
-            c.getBoundsInScreen(r)
-            if (r.isEmpty || r.top < 0 ||
-                r.bottom > resources.displayMetrics.heightPixels
-            ) continue
-            return r
-        }
-        return null
-    }
-
-    private fun findFeatureRect(root: AccessibilityNodeInfo, words: List<String>): Rect? {
-        for (w in words) {
-            val nodes = root.findAccessibilityNodeInfosByText(w) ?: continue
-            for (n in nodes) {
-                if (!containsWord(n.text, w)) continue
-                if (!n.isVisibleToUser) continue
-                val r = Rect()
-                n.getBoundsInScreen(r)
-                if (!r.isEmpty) return r
-            }
-        }
-        return null
-    }
-
-    private fun featureAboveButton(fr: Rect, btn: Rect): Boolean {
-        val maxUp = (240 * resources.displayMetrics.density).toInt()
-        val horizOk = fr.right > btn.left && fr.left < btn.right
-        val vertOk = fr.bottom <= btn.top + 50 && btn.top - fr.bottom < maxUp
-        return horizOk && vertOk
-    }
-
-    // ===== 随机延时 =====
-
-    private fun delayRange(): Pair<Int, Int> {
-        val (lo, hi) = if (currentMode == MainActivity.MODE_SNIPER)
-            sp.getInt("sniper_delay_min", 0) to sp.getInt("sniper_delay_max", 200)
-        else
-            sp.getInt("sentry_delay_min", 0) to sp.getInt("sentry_delay_max", 800)
-        val min = lo.coerceIn(0, 10000)
-        val max = hi.coerceIn(min, 10000)
-        return min to max
-    }
-
-    // ===== 探针：右边缘丝带扫描（颜色+位置+形状一次完成） =====
-
-    private fun probe() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
-        if (currentMode == MainActivity.MODE_SNIPER) return
-        if (probeBusy) return
-        val now = SystemClock.elapsedRealtime()
-        if (now - lastProbe < 1000) return
-        lastProbe = now
-        probeBusy = true
-        try {
-            takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
-                override fun onSuccess(screenshot: ScreenshotResult) {
-                    try {
-                        val hw = Bitmap.wrapHardwareBuffer(
-                            screenshot.hardwareBuffer, screenshot.colorSpace)
-                        val count = hw?.let { countBadges(it) } ?: 0
-                        hw?.recycle()
-                        onProbeResult(count)
-                    } catch (e: Exception) {
-                        log("[探针] ${e.message}")
-                    }
-                    screenshot.hardwareBuffer.close()
-                    probeBusy = false
-                }
-                override fun onFailure(errorCode: Int) {
-                    probeBusy = false
-                    log("[探针] 截图失败 code=$errorCode")
-                }
-            })
-        } catch (e: Exception) {
-            probeBusy = false
-            log("[探针] 截图调用异常: ${e.message}")
-        }
-    }
-
-    private fun isOrange(c: Int): Boolean {
-        val r = (c shr 16) and 0xFF
-        val g = (c shr 8) and 0xFF
-        val b = c and 0xFF
-        return r >= 200 && g in 60..170 && b <= 110 && r > g + 40
-    }
-
-    /**
-     * 只扫最右2列，一趟完成 位置+颜色+形状：
-     * 连续橙行 ≥ MIN_RUN 算一个丝带角标，返回角标总数。
-     */
-    private fun countBadges(src: Bitmap): Int {
-        return try {
-            val soft = src.copy(Bitmap.Config.ARGB_8888, false) ?: return 0
-            val w = soft.width
-            val h = soft.height
-            val x1 = w - 1
-            val x2 = w - 2
-            var count = 0
-            var run = 0
-            var maxRun = 0
-            for (y in 0 until h) {
-                val orange = isOrange(soft.getPixel(x1, y)) || isOrange(soft.getPixel(x2, y))
-                if (orange) {
-                    run++
-                } else {
-                    if (run > maxRun) maxRun = run
-                    if (run >= MIN_RUN) count++
-                    run = 0
-                }
-            }
-            if (run > maxRun) maxRun = run
-            if (run >= MIN_RUN) count++
-            soft.recycle()
-            if (count > 0 || maxRun > 0) {
-                log("[探针] 角标=$count 最长橙段=$maxRun 行")
-            }
-            count
-        } catch (e: Exception) {
-            log("[探针] 像素判定异常: ${e.message}")
-            0
-        }
-    }
-
-    /** 终版：增单当帧响，减单两帧确认，冷却欠账补哨，抢单销账 */
-    @Volatile private var pendingLow = -1
-    @Volatile private var owedCount = 0
-
-    private fun onProbeResult(count: Int) {
-        if (currentMode == MainActivity.MODE_SILENT) return
-
-        // ── 增单：当帧吹哨，绝不等待 ──
-        if (count > lastBadgeCount) {
-            pendingLow = -1
-            val now = SystemClock.elapsedRealtime()
-            if (now - lastRing > 6000) {
-                lastRing = now
-                owedCount = 0
-                when (currentMode) {
-                    MainActivity.MODE_SHADOW ->
-                        log("[影子·探针] 新单！角标 $lastBadgeCount → $count，响铃验证")
-                    MainActivity.MODE_SENTRY ->
-                        log("[哨兵·探针] 新单！角标 $lastBadgeCount → $count，吹哨")
-                }
-                playAlert()
-            } else {
-                if (count > owedCount) owedCount = count
-                log("[探针] 角标 $lastBadgeCount → $count，冷却中，记账待补哨")
-            }
-            lastBadgeCount = count
-            return
-        }
-
-        // ── 减单：两帧一致才认账（闪断一帧不算）──
-        if (count < lastBadgeCount) {
-            if (count != pendingLow) {
-                pendingLow = count
-            } else {
-                pendingLow = -1
-                owedCount = 0
-                log("[探针] 角标 $lastBadgeCount → $count，单被抢/滑走，静默更新")
-                lastBadgeCount = count
-            }
-            return
-        }
-
-        // ── 不变：清算欠账 ──
-        pendingLow = -1
-        if (owedCount > 0 && count >= owedCount) {
-            val now = SystemClock.elapsedRealtime()
-            if (now - lastRing > 10000) {
-                lastRing = now
-                owedCount = 0
-                log("[哨兵·探针] 冷却结束，欠账补哨（角标=$count）")
-                playAlert()
-            }
-        }
-    }
-
-    private fun playAlert() {
-        try {
-            val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-            val old = am.getStreamVolume(AudioManager.STREAM_ALARM)
-            am.setStreamVolume(
-                AudioManager.STREAM_ALARM,
-                am.getStreamMaxVolume(AudioManager.STREAM_ALARM),
-                0
-            )
-            val uri = sp.getString("alert_uri", null)?.let {
-                try { android.net.Uri.parse(it) } catch (_: Exception) { null }
-            } ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
-            repeat(2) { i ->
-                handler.postDelayed({
-                    try {
-                        val r = RingtoneManager.getRingtone(this, uri)
-                        if (r != null) {
-                            r.audioAttributes = AudioAttributes.Builder()
-                                .setUsage(AudioAttributes.USAGE_ALARM)
-                                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                                .build()
-                            r.play()
-                            handler.postDelayed({
-                                try { r.stop() } catch (_: Exception) {}
-                            }, 2000)
-                        }
-                    } catch (e: Exception) {
-                        log("[铃声] 第${i + 1}遍失败: ${e.message}")
-                    }
-                }, i * 2500L)
-            }
-            handler.postDelayed({
-                try { am.setStreamVolume(AudioManager.STREAM_ALARM, old, 0) } catch (_: Exception) {}
-            }, 5000)
-        } catch (e: Exception) {
-            log("[铃声] 异常: ${e.message}")
-        }
-    }
-
-    /**
-     * 散点点击 + 真实回执。
-     * onCompleted 才记命中，onCancelled 明确报错——日志不再说谎。
-     */
-    private fun clickRect(r: Rect) {
-        val insetX = (r.width() * 0.2f).toInt().coerceAtLeast(1)
-        val insetY = (r.height() * 0.2f).toInt().coerceAtLeast(1)
-        val left = r.left + insetX
-        val right = r.right - insetX
-        val top = r.top + insetY
-        val bottom = r.bottom - insetY
-        val x = if (right > left) Random.nextInt(left, right) else r.exactCenterX().toInt()
-        val y = if (bottom > top) Random.nextInt(top, bottom) else r.exactCenterY().toInt()
-        val path = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
-        val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, 50))
-            .build()
-        dispatchGesture(gesture, object : GestureResultCallback() {
-            override fun onCompleted(g: GestureDescription?) {
-                recordHit()
-                log("[命中] 点击完成 → ($x, $y) ✓")
-            }
-            override fun onCancelled(g: GestureDescription?) {
-                log("[命中] 点击被系统取消！($x, $y) ✗ 检查无障碍/悬浮窗遮挡")
-            }
-        }, null)
-    }
-
-    private fun recordHit() {
-        val day = SimpleDateFormat("yyyyMMdd", Locale.CHINA).format(Date())
-        sp.edit()
-            .putInt("hit_$day", sp.getInt("hit_$day", 0) + 1)
-            .putInt("total_hit", sp.getInt("total_hit", 0) + 1)
-            .putLong("last_hit_time", System.currentTimeMillis())
-            .apply()
-    }
-
-    private fun buildNotification(): Notification {
+    private fun startForeground() {
+        val nm = getSystemService(NotificationManager::class.java)
+        nm.createNotificationChannel(
+            NotificationChannel(CHANNEL_ID, "抢单哨兵", NotificationManager.IMPORTANCE_LOW)
+        )
         val pi = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE
         )
-        return Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle("轻点运行中")
-            .setContentText("模式=${MainActivity.MODE_NAMES[safeLogIndex()]}")
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+        val noti = Notification.Builder(this, CHANNEL_ID)
+            .setContentTitle("轻点·哨兵在岗")
+            .setContentText(notiText())
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
             .setContentIntent(pi)
             .setOngoing(true)
-            .build()
+        startForeground(NOTI_ID, noti.build())
     }
 
-    private fun log(msg: String) {
-        android.util.Log.d("LightGrab", msg)
-        try {
-            pools[safeLogIndex()].add(msg)
-            handler.removeCallbacks(flushTask)
-            handler.postDelayed(flushTask, 1000)
-        } catch (_: Exception) {}
+    private fun notiText(): String {
+        val mode = prefs.getString("mode", "shadow") ?: "shadow"
+        val lr = prefs.getString("lock_rect", null)
+        val lock = if (!lr.isNullOrBlank() && lr.split(",").size == 4) "锁区✅" else "锁区未配(回退双词)"
+        return "模式:$mode $lock"
     }
+
+    fun refreshNotification() {
+        val nm = getSystemService(NotificationManager::class.java)
+        val pi = PendingIntent.getActivity(
+            this, 0, Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE
+        )
+        nm.notify(NOTI_ID, Notification.Builder(this, CHANNEL_ID)
+            .setContentTitle("轻点·哨兵在岗")
+            .setContentText(notiText())
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setContentIntent(pi)
+            .setOngoing(true)
+            .build())
+    }
+
+    // ---------- 事件入口 ----------
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event == null) return
+
+        // ===== 探针线（响铃）：保留包名闸，只认目标App =====
+        val targetPkg = prefs.getString("target_pkg", null)
+        if (!targetPkg.isNullOrBlank() && event.packageName == targetPkg &&
+            event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        ) {
+            probeBadge(event.packageName.toString())
+        }
+
+        // ===== 主干线（抓单）：不问包名，任何App都进来认脸 =====
+        if (event.eventType != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
+            event.eventType != AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
+        ) return
+
+        val root = rootInActiveWindow ?: return
+        try {
+            handleMainLine(root)
+        } catch (t: Throwable) {
+            addLog("主干异常: ${t.message}")
+        }
+    }
+
+    // ---------- 探针线：角标增单 → 响铃一遍 ----------
+
+    private fun probeBadge(pkg: String) {
+        val root = rootInActiveWindow ?: return
+        val cnt = countBadgeCandidates(root, pkg) ?: return
+        if (lastBadgeCount == -1) {
+            lastBadgeCount = cnt          // Q2：首帧只校准，不响铃
+            addLog("角标校准=$cnt")
+            return
+        }
+        if (cnt > lastBadgeCount) {
+            addLog("角标增单 $lastBadgeCount→$cnt，响铃")
+            playAlert()
+        }
+        lastBadgeCount = cnt
+    }
+
+    // 角标计数：在目标App界面上找"接/新/单"类短文本节点数（可按实际页面词调整）
+    private fun countBadgeCandidates(root: AccessibilityNodeInfo, pkg: String): Int? {
+        return try {
+            val kw = prefs.getString("probe_word", "接") ?: "接"
+            root.findAccessibilityNodeInfosByText(kw).count { it.text?.length ?: 99 <= 3 }
+        } catch (t: Throwable) { null }
+    }
+
+    private fun playAlert() {
+        if (prefs.getString("mode", "shadow") == "silent") return
+        try {
+            val uriStr = prefs.getString("alert_uri", null)
+                ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM).toString()
+            stopAlert()
+            alertPlayer = MediaPlayer().apply {
+                setDataSource(this@GrabService, Uri.parse(uriStr))
+                setAudioStreamType(AudioManager.STREAM_ALARM)
+                isLooping = false
+                prepare()
+                start()
+            }
+        } catch (t: Throwable) {
+            addLog("响铃失败: ${t.message}")
+        }
+    }
+
+    private fun stopAlert() {
+        alertPlayer?.let { try { if (it.isPlaying) it.stop(); it.release() } catch (_: Throwable) {} }
+        alertPlayer = null
+    }
+
+    fun stopAlertNow() { stopAlert() }
+
+    // ---------- 主干线：认脸 → 锁区/回退双词 → 延时 → 下手 ----------
+
+    private fun handleMainLine(root: AccessibilityNodeInfo) {
+        val mode = prefs.getString("mode", "shadow") ?: "shadow"
+        if (mode == "silent") return
+
+        val featureWord = prefs.getString("feature_word", null) ?: return
+        val now = System.currentTimeMillis()
+        if (now - lastFireAt < 1500) return
+
+        val featureNodes = root.findAccessibilityNodeInfosByText(featureWord)
+        if (featureNodes.isEmpty()) return
+
+        val calibMode = prefs.getBoolean("calib_mode", false)
+        if (calibMode) {
+            // 标定模式：只打日志量坐标，绝不点击
+            val lr = parseRect(prefs.getString("lock_rect", null))
+            for (fn in featureNodes) {
+                val fr = Rect(); fn.getBoundsInScreen(fr)
+                addLog("[标定] 特征矩形(px): ${fr.left},${fr.top},${fr.width()},${fr.height()}")
+                if (lr != null) {
+                    val dens = resources.displayMetrics.density
+                    val dl = (fr.left / dens).toInt(); val dt = (fr.top / dens).toInt()
+                    addLog("[标定] 参考答案(dp): ${dl + lr[0]},${dt + lr[1]},${lr[2]},${lr[3]}")
+                }
+            }
+            return
+        }
+
+        val btn = locateButton(root, featureNodes) ?: return
+        val br = Rect(); btn.getBoundsInScreen(br)
+        if (br.width() <= 0 || br.height() <= 0) return
+
+        lastFireAt = now
+        addLog("✅认脸 按钮=${br.left},${br.top}")
+        incToday()
+
+        val min = prefs.getInt(if (mode == "sniper") "sniper_min" else "sentry_min", 200)
+        val max = prefs.getInt(if (mode == "sniper") "sniper_max" else "sentry_max", 800)
+        val delay = Random.nextLong(min.toLong(), (max + 1).toLong())
+
+        handler.postDelayed({ fire() }, delay)
+    }
+
+    private fun parseRect(s: String?): IntArray? {
+        if (s.isNullOrBlank()) return null
+        val p = s.split(",").mapNotNull { it.trim().toIntOrNull() }
+        return if (p.size == 4) p.toIntArray() else null
+    }
+
+    // 按钮定位：锁区优先，未配置回退双词
+    private fun locateButton(
+        root: AccessibilityNodeInfo,
+        featureNodes: List<AccessibilityNodeInfo>
+    ): AccessibilityNodeInfo? {
+        val lr = parseRect(prefs.getString("lock_rect", null))
+        if (lr != null) {
+            // ===== 锁区路线：特征矩形 + 四数偏移 =====
+            val fn = featureNodes.firstOrNull() ?: return null
+            val fr = Rect(); fn.getBoundsInScreen(fr)
+            val dens = resources.displayMetrics.density
+            val left = (fr.left / dens).toInt() + lr[0]
+            val top = (fr.top / dens).toInt() + lr[1]
+            val target = Rect(
+                (left * dens).toInt(), (top * dens).toInt(),
+                ((left + lr[2]) * dens).toInt(), ((top + lr[3]) * dens).toInt()
+            )
+            // 在目标矩形中心找可点节点
+            return findClickableAt(root, target)
+        }
+        // ===== 回退：双词路线 =====
+        val keyword = prefs.getString("keyword", null) ?: return null
+        val kwNodes = root.findAccessibilityNodeInfosByText(keyword)
+        for (n in kwNodes) {
+            if (!n.isClickable) continue
+            val r = Rect(); n.getBoundsInScreen(r)
+            // 位置校验：关键词必须在某个特征词下方240dp内
+            for (fn in featureNodes) {
+                val fr = Rect(); fn.getBoundsInScreen(fr)
+                val dens = resources.displayMetrics.density
+                if (r.top >= fr.top && r.top - fr.bottom <= 240 * dens &&
+                    abs(r.centerX() - fr.centerX()) < 200 * dens
+                ) return n
+            }
+        }
+        return null
+    }
+
+    // 在矩形区域内找可点击节点（遍历树，取中心落在区域内且clickable的节点）
+    private fun findClickableAt(root: AccessibilityNodeInfo, target: Rect): AccessibilityNodeInfo? {
+        var best: AccessibilityNodeInfo? = null
+        fun walk(n: AccessibilityNodeInfo) {
+            val r = Rect(); n.getBoundsInScreen(r)
+            if (r.contains(target.centerX(), target.centerY())) {
+                if (n.isClickable) best = n
+            }
+            for (i in 0 until n.childCount) {
+                n.getChild(i)?.let { walk(it); it.recycle() }
+            }
+        }
+        walk(root)
+        return best
+    }
+
+    // ---------- 下手：散点点击 ----------
+
+    private fun fire() {
+        val root = rootInActiveWindow ?: run { addLog("下手时无窗口"); return }
+        // 重瞄：特征词还在才下手
+        val featureWord = prefs.getString("feature_word", null) ?: return
+        val featureNodes = root.findAccessibilityNodeInfosByText(featureWord)
+        if (featureNodes.isEmpty()) { addLog("重瞄扑空，放弃"); return }
+
+        val btn = locateButton(root, featureNodes) ?: run { addLog("重瞄按钮扑空"); return }
+        val r = Rect(); btn.getBoundsInScreen(r)
+        if (r.width() <= 0) { addLog("重瞄矩形异常"); return }
+
+        val cx = r.centerX(); val cy = r.centerY()
+        val ox = Random.nextInt(-r.width() / 4, r.width() / 4 + 1)
+        val oy = Random.nextInt(-r.height() / 4, r.height() / 4 + 1)
+        val x = (cx + ox).toFloat(); val y = (cy + oy).toFloat()
+
+        val path = android.graphics.Path().apply { moveTo(x, y) }
+        val stroke = GestureDescription.StrokeDescription(path, 0, 60)
+        dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(),
+            object : GestureResultCallback() {
+                override fun onCompleted(g: GestureDescription?) {
+                    addLog("🎯点击回执 ($x,$y)")
+                }
+                override fun onCancelled(g: GestureDescription?) {
+                    addLog("点击被取消")
+                }
+            }, null)
+    }
+
+    // ---------- 日志与计数 ----------
+
+    private fun incToday() {
+        val key = "hits_" + sdf.format(Date()).substring(0, 5)
+        prefs.edit().putInt(key, prefs.getInt(key, 0) + 1)
+            .putInt("hits_total", prefs.getInt("hits_total", 0) + 1).apply()
+    }
+
+    private fun addLog(msg: String) {
+        val line = "${sdf.format(Date())} $msg"
+        synchronized(logList) {
+            logList.add(line)
+            if (logList.size > 200) logList.removeAt(0)
+        }
+    }
+
+    fun getLogs(): String = synchronized(logList) { logList.joinToString("\n") }
 }
