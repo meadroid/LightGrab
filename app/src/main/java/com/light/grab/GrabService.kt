@@ -13,7 +13,6 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
-import android.graphics.Path
 import android.graphics.Rect
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -29,15 +28,23 @@ class GrabService : AccessibilityService() {
         const val CHANNEL_ID = "grab_channel"
         const val NOTI_ID = 1001
         @Volatile var instance: GrabService? = null
+        @Volatile var isRunning = false
+        @Volatile var currentMode = 0
     }
 
     private val handler = Handler(Looper.getMainLooper())
     private var lastFireAt = 0L
     private var lastBadgeCount = -1
     private var alertPlayer: MediaPlayer? = null
-    private val prefs by lazy { getSharedPreferences("qingdan", MODE_PRIVATE) }
+    private val prefs by lazy { getSharedPreferences("lightdot", MODE_PRIVATE) }
     private val logList = mutableListOf<String>()
     private val sdf = SimpleDateFormat("MM-dd HH:mm:ss", Locale.CHINA)
+
+    fun onModeChanged() { refreshNotification() }
+
+    private fun modeName(): String =
+        listOf("shadow", "sentry", "sniper", "silent")
+            .getOrElse(currentMode.coerceIn(0, 3)) { "shadow" }
 
     // ---------- 生命周期（纯事件驱动：无心跳、无定时器、无WakeLock） ----------
 
@@ -78,7 +85,7 @@ class GrabService : AccessibilityService() {
     }
 
     private fun notiText(): String {
-        val mode = prefs.getString("mode", "shadow") ?: "shadow"
+        val mode = modeName()
         val lr = prefs.getString("lock_rect", null)
         val lock = if (!lr.isNullOrBlank() && lr.split(",").size == 4) "锁区✅" else "锁区未配(回退双词)"
         return "模式:$mode $lock"
@@ -105,11 +112,11 @@ class GrabService : AccessibilityService() {
         if (event == null) return
 
         // ===== 探针线（响铃）：保留包名闸，只认目标App =====
-        val targetPkg = prefs.getString("target_pkg", null)
+        val targetPkg = prefs.getString("app_pkg", null)
         if (!targetPkg.isNullOrBlank() && event.packageName == targetPkg &&
             event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
         ) {
-            probeBadge(event.packageName.toString())
+            if (isRunning) probeBadge(event.packageName.toString())
         }
 
         // ===== 主干线（抓单）：不问包名，任何App都进来认脸 =====
@@ -151,7 +158,7 @@ class GrabService : AccessibilityService() {
     }
 
     private fun playAlert() {
-        if (prefs.getString("mode", "shadow") == "silent") return
+        if (modeName() == "silent") return
         try {
             val uriStr = prefs.getString("alert_uri", null)
                 ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM).toString()
@@ -178,7 +185,8 @@ class GrabService : AccessibilityService() {
     // ---------- 主干线：认脸 → 锁区/回退双词 → 延时 → 下手 ----------
 
     private fun handleMainLine(root: AccessibilityNodeInfo) {
-        val mode = prefs.getString("mode", "shadow") ?: "shadow"
+        if (!isRunning) return
+        val mode = modeName()
         if (mode == "silent") return
 
         val featureWord = prefs.getString("feature_word", null) ?: return
@@ -212,8 +220,8 @@ class GrabService : AccessibilityService() {
         addLog("✅认脸 按钮=${br.left},${br.top}")
         incToday()
 
-        val min = prefs.getInt(if (mode == "sniper") "sniper_min" else "sentry_min", 200)
-        val max = prefs.getInt(if (mode == "sniper") "sniper_max" else "sentry_max", 800)
+        val min = prefs.getInt(if (mode == "sniper") "sniper_delay_min" else "sentry_delay_min", 200)
+        val max = prefs.getInt(if (mode == "sniper") "sniper_delay_max" else "sentry_delay_max", 800)
         val delay = Random.nextLong(min.toLong(), (max + 1).toLong())
 
         handler.postDelayed({ fire() }, delay)
