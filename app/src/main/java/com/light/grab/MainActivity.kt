@@ -27,7 +27,7 @@ class MainActivity : Activity() {
     private lateinit var stateMode: TextView
     private lateinit var stateToday: TextView
     private lateinit var stateLock: TextView
-    private var modeBtns = mutableListOf<Button>()
+    private val modeBtns = mutableListOf<Button>()
     private val h = Handler(Looper.getMainLooper())
     private val tick = object : Runnable {
         override fun run() {
@@ -35,6 +35,12 @@ class MainActivity : Activity() {
             h.postDelayed(this, 2000)
         }
     }
+
+    // 色板
+    private val ink = -0x22181F1F      // 前景文字
+    private val grayText = -0x755C6D71
+    private val mint = -0x85B94E2A
+    private val chipBg = -0xF0E6ECDD.toInt()
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
@@ -46,20 +52,17 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun chip(text: String): Button {
-        val b = Button(this)
-        b.text = text
-        b.textSize = 13f
-        b.background = getDrawable(android.R.drawable.dialog_halo_light)
-        b.setBackgroundColor(-0xFE2D5DC0.toInt()) // grayChip
-        b.setTextColor(-0x755C6D71.toInt())        // grayText
-        b.setPadding(0, 20, 0, 20)
-        return b
+    private fun chip(text: String): Button = Button(this).apply {
+        this.text = text
+        textSize = 13f
+        setBackgroundColor(chipBg)
+        setTextColor(grayText)
+        setPadding(0, 20, 0, 20)
     }
 
     private fun selectMode(sel: Button, name: String) {
-        modeBtns.forEach { it.setTextColor(-0x755C6D71.toInt()) } // 未选灰
-        sel.setTextColor(-0x85B94E2A.toInt())                     // 薄荷绿选中
+        modeBtns.forEach { setTextColor(grayText) }
+        sel.setTextColor(mint)
         stateMode.text = "♟ 模式：$name 待启动"
         log("模式切换 → $name")
     }
@@ -69,41 +72,35 @@ class MainActivity : Activity() {
         GrabService.btnWord = sp.getString("btn", "确认抢单")!!
         GrabService.lockRect = parseLock(sp.getString("lock", "") ?: "")
 
-        val ink = -0x22181F1F     // ink  #DDE7E1
-        val gray = -0x755C6D71    // grayText
-        val mint = -0x85B94E2A    // mint #2E9E7B
-
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(-0xF1EAEEDF.toInt()) // bgDark
+            setBackgroundColor(-0xF1EAEEDF.toInt())
             setPadding(44, 90, 44, 44)
         }
 
-        // 标题行
         val titleRow = LinearLayout(this).apply {
             gravity = Gravity.CENTER_VERTICAL
             addView(TextView(this@MainActivity).apply {
-                text = "轻点"; textSize = 30f; setTextColor(gray)
+                text = "轻点"; textSize = 30f; setTextColor(grayText)
             }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             addView(TextView(this@MainActivity).apply {
                 text = "⚙"; textSize = 26f
-                setOnClickListener { showSettings() }
                 setPadding(30, 10, 10, 10)
+                setOnClickListener { showSettings() }
             })
         }
 
-        // 四模式 chips
         val modeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         listOf("影子", "哨兵", "狙击", "静默").forEachIndexed { i, m ->
             val b = chip(m)
             b.setOnClickListener { selectMode(b, m) }
-            if (i < 3) (b.layoutParams as? LinearLayout.LayoutParams)
-                ?: b.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = 14 }
-            else b.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            modeBtns.add(b); modeRow.addView(b)
+            b.layoutParams = LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
+            ).apply { if (i < 3) marginEnd = 14 }
+            modeBtns.add(b)
+            modeRow.addView(b)
         }
 
-        // 开启监听大按钮
         val toggle = chip("开启监听").apply {
             textSize = 17f
             setPadding(0, 34, 0, 34)
@@ -119,27 +116,33 @@ class MainActivity : Activity() {
             }
         }
 
-        stateMode = TextView(this).apply { text = "♟ 模式：影子 待启动"; textSize = 16f; setTextColor(ink); setPadding(0, 40, 0, 8) }
-        stateToday = TextView(this).apply { text = "🕐 今日：命中 0 发"; textSize = 16f; setTextColor(ink); setPadding(0, 8, 0, 8) }
+        stateMode = TextView(this).apply {
+            text = "♟ 模式：影子 待启动"; textSize = 16f; setTextColor(ink); setPadding(0, 40, 0, 8)
+        }
+        stateToday = TextView(this).apply {
+            text = "🕐 今日：命中 0 发"; textSize = 16f; setTextColor(ink); setPadding(0, 8, 0, 8)
+        }
         stateLock = TextView(this).apply { textSize = 16f; setTextColor(ink); setPadding(0, 8, 0, 8) }
         refreshLock()
 
         logBox = TextView(this).apply {
             textSize = 13f
-            setTextColor(gray)
+            setTextColor(grayText)
             setPadding(28, 28, 28, 28)
-            setBackgroundColor(-0xEDDFF5E6.toInt()) // logBg
+            setBackgroundColor(-0xEDDFF5E6.toInt())
         }
 
         root.addView(titleRow)
         root.addView(modeRow)
-        root.addView(toggle, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = 30 })
+        root.addView(toggle, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = 30 })
         root.addView(stateMode)
         root.addView(stateToday)
         root.addView(stateLock)
-        root.addView(ScrollView(this).apply {
-            addView(logBox)
-        }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f).apply { topMargin = 20 })
+        root.addView(ScrollView(this).apply { addView(logBox) },
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f)
+                .apply { topMargin = 20 })
 
         setContentView(root)
         h.post(tick)
@@ -147,10 +150,9 @@ class MainActivity : Activity() {
     }
 
     private fun log(s: String) {
-        val t = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.CHINA)
-            .format(java.util.Date())
-        if (this::logBox.isInitialized)
-            logBox.append("$t  $s\n")
+        if (!this::logBox.isInitialized) return
+        val t = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.CHINA).format(java.util.Date())
+        logBox.append("$t  $s\n")
     }
 
     private fun refreshLock() {
