@@ -116,7 +116,10 @@ class GrabService : AccessibilityService() {
         if (!targetPkg.isNullOrBlank() && event.packageName == targetPkg &&
             event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
         ) {
-            if (isRunning) probeBadge(event.packageName.toString())
+            // 静默：一切停止；狙击：静音不出声
+            if (isRunning && modeName() != "silent" && modeName() != "sniper") {
+                probeBadge(event.packageName.toString())
+            }
         }
 
         // ===== 主干线（抓单）：不问包名，任何App都进来认脸 =====
@@ -158,7 +161,8 @@ class GrabService : AccessibilityService() {
     }
 
     private fun playAlert() {
-        if (modeName() == "silent") return
+        // 狙击静音不出声；静默一切停止
+        if (modeName() == "silent" || modeName() == "sniper") return
         try {
             val uriStr = prefs.getString("alert_uri", null)
                 ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM).toString()
@@ -187,7 +191,7 @@ class GrabService : AccessibilityService() {
     private fun handleMainLine(root: AccessibilityNodeInfo) {
         if (!isRunning) return
         val mode = modeName()
-        if (mode == "silent") return
+        if (mode == "silent") return   // 静默：一切停止
 
         val featureWord = prefs.getString("feature_word", null) ?: return
         val now = System.currentTimeMillis()
@@ -216,15 +220,29 @@ class GrabService : AccessibilityService() {
         val br = Rect(); btn.getBoundsInScreen(br)
         if (br.width() <= 0 || br.height() <= 0) return
 
-        lastFireAt = now
-        addLog("✅认脸 按钮=${br.left},${br.top}")
-        incToday()
-
+        // 延时：读设置区间，随机取值
         val min = prefs.getInt(if (mode == "sniper") "sniper_delay_min" else "sentry_delay_min", 200)
         val max = prefs.getInt(if (mode == "sniper") "sniper_delay_max" else "sentry_delay_max", 800)
         val delay = Random.nextLong(min.toLong(), (max + 1).toLong())
 
-        handler.postDelayed({ fire() }, delay)
+        // 散点：按钮矩形内四分之一范围随机偏移
+        val ox = Random.nextInt(-br.width() / 4, br.width() / 4 + 1)
+        val oy = Random.nextInt(-br.height() / 4, br.height() / 4 + 1)
+        val sx = br.centerX() + ox
+        val sy = br.centerY() + oy
+
+        lastFireAt = now
+        addLog("✅认脸 按钮=${br.left},${br.top} · 延时=${delay}ms(${min}~${max}) · 散点($sx,$sy)")
+        incToday()
+
+        // ===== 影子模式：检阅官，链路全通，最后点击不落 =====
+        if (mode == "shadow") {
+            addLog("👣检阅 目标($sx,$sy) 延时${delay}ms · 链路全通 · 不落点击")
+            playAlert()
+            return
+        }
+
+        handler.postDelayed({ fire(sx.toFloat(), sy.toFloat(), delay) }, delay)
     }
 
     private fun parseRect(s: String?): IntArray? {
@@ -287,9 +305,9 @@ class GrabService : AccessibilityService() {
         return best
     }
 
-    // ---------- 下手：散点点击 ----------
+    // ---------- 下手：散点点射（坐标、延时由主干线定好传入） ----------
 
-    private fun fire() {
+    private fun fire(x: Float, y: Float, delay: Long) {
         val root = rootInActiveWindow ?: run { addLog("下手时无窗口"); return }
         // 重瞄：特征词还在才下手
         val featureWord = prefs.getString("feature_word", null) ?: return
@@ -300,17 +318,13 @@ class GrabService : AccessibilityService() {
         val r = Rect(); btn.getBoundsInScreen(r)
         if (r.width() <= 0) { addLog("重瞄矩形异常"); return }
 
-        val cx = r.centerX(); val cy = r.centerY()
-        val ox = Random.nextInt(-r.width() / 4, r.width() / 4 + 1)
-        val oy = Random.nextInt(-r.height() / 4, r.height() / 4 + 1)
-        val x = (cx + ox).toFloat(); val y = (cy + oy).toFloat()
-
+        addLog("🔫散点点射 落点($x,$y) 延时=${delay}ms")
         val path = android.graphics.Path().apply { moveTo(x, y) }
         val stroke = GestureDescription.StrokeDescription(path, 0, 60)
         dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(),
             object : GestureResultCallback() {
                 override fun onCompleted(g: GestureDescription?) {
-                    addLog("🎯点击回执 ($x,$y)")
+                    addLog("🎯点击回执 ($x,$y) · 全程延时=${delay}ms")
                 }
                 override fun onCancelled(g: GestureDescription?) {
                     addLog("点击被取消")
