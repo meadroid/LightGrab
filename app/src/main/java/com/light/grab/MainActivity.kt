@@ -37,6 +37,8 @@ class MainActivity : AppCompatActivity() {
             R.id.chipSniper, R.id.chipSilent
         )
         private const val REQ_NOTI = 9001
+        private const val ID_LOCK = 101
+        private const val ID_CALIB = 102
     }
 
     private lateinit var sp: SharedPreferences
@@ -80,7 +82,6 @@ class MainActivity : AppCompatActivity() {
             }
             running = !running
             GrabService.isRunning = running
-            // 切换时清探针的角标计数，避免旧数残留导致误判
             log(if (running) "开启监听 · ${MODE_NAMES[GrabService.currentMode.coerceIn(0, 3)]}模式" else "已停止监听")
             updateMainBtn()
             refreshStatus()
@@ -148,10 +149,37 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
+    // ================= 军火库菜单（9项定稿：无重复无遗漏） =================
+
     private fun showArsenalMenu() {
         val popup = PopupMenu(this, btnArsenal)
-        popup.menuInflater.inflate(R.menu.menu_main, popup.menu)
-        popup.setOnMenuItemClickListener { item -> onOptionsItemSelected(item) }
+        val menu = popup.menu
+        menu.add(0, ID_LOCK, 0, "🎯 锁区设置")
+        menu.add(0, ID_CALIB, 0,
+            if (sp.getBoolean("calib_mode", false)) "🧪 标定开关（当前：开）"
+            else "🧪 标定开关（当前：关）")
+        menu.add(0, R.id.action_feature_word, 0, "🔑 特征词（认单）")
+        menu.add(0, R.id.action_keyword, 0, "✒️ 关键词（点按钮）")
+        menu.add(0, R.id.action_target, 0, "📱 目标应用")
+        menu.add(0, R.id.action_sentry_delay, 0, "⏱ 哨兵延时")
+        menu.add(0, R.id.action_sniper_delay, 0, "⏱ 狙击延时")
+        menu.add(0, R.id.action_ringtone, 0, "🔔 抢单铃声")
+        menu.add(0, R.id.action_permission, 0, "♿ 无障碍权限")
+        popup.setOnMenuItemClickListener { item ->
+            when (item.itemId) {
+                ID_LOCK -> { askLockRect(); true }
+                ID_CALIB -> {
+                    val now = !sp.getBoolean("calib_mode", false)
+                    sp.edit().putBoolean("calib_mode", now).apply()
+                    Toast.makeText(this,
+                        if (now) "标定已开：出现弹窗只打坐标日志，绝不点击"
+                        else "标定已关：恢复正常抢单",
+                        Toast.LENGTH_LONG).show()
+                    true
+                }
+                else -> onOptionsItemSelected(item)
+            }
+        }
         popup.show()
     }
 
@@ -195,10 +223,12 @@ class MainActivity : AppCompatActivity() {
             java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.CHINA)
                 .format(java.util.Date(last))
         else "无"
+        val lr = sp.getString("lock_rect", null)
+        val lockStr = if (!lr.isNullOrBlank() && lr.split(",").size == 4) "已配" else "未配"
         val line1 = if (running && GrabService.instance != null) "♟️ 模式：${modeName} 运行中"
                      else "♟️ 模式：${modeName} 待启动"
         val line2 = "🕐 今日：命中 $today 发  $lastStr"
-        val line3 = "🏆 累计：命中 $total 发"
+        val line3 = "🏆 累计：命中 $total 发  🎯锁区：$lockStr"
         tvStatus.text = "$line1\n$line2\n$line3"
     }
 
@@ -233,6 +263,38 @@ class MainActivity : AppCompatActivity() {
             }
             else -> super.onOptionsItemSelected(item)
         }
+    }
+
+    // ---------- 锁区设置（特征矩形右下角为原点：dx, dy, 宽, 高，单位 dp） ----------
+
+    private fun askLockRect() {
+        val cur = sp.getString("lock_rect", null)
+        val input = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_TEXT
+            hint = "格式：dx,dy,宽,高  如：-120,-80,110,44"
+            setText(cur ?: "")
+            setSingleLine(true)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("锁区设置（dp，相对特征词矩形右下角）\n先开标定模式抄参考答案，再填这里")
+            .setView(input)
+            .setPositiveButton("保存") { _, _ ->
+                val txt = input.text.toString().trim()
+                if (txt.isEmpty()) {
+                    sp.edit().remove("lock_rect").apply()
+                    Toast.makeText(this, "锁区已清除（回退双词路线）", Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                val p = txt.split(",").mapNotNull { it.trim().toIntOrNull() }
+                if (p.size != 4) {
+                    Toast.makeText(this, "格式不对！要4个数字用逗号隔开", Toast.LENGTH_LONG).show()
+                    return@setPositiveButton
+                }
+                sp.edit().putString("lock_rect", p.joinToString(",")).apply()
+                Toast.makeText(this, "锁区已保存：${p.joinToString(",")}", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("取消", null)
+            .show()
     }
 
     private fun askApp() {
