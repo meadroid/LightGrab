@@ -1,13 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">轻点</string>
-    <string name="svc_desc">抢单辅助</string>
-    <string name="title_text">轻点</string>
-    <string name="settings_title">设置</string>
-    <string name="target_app">目标应用</string>
-    <string name="keyword">关键词</string>
-    <string name="sentry_delay">哨兵延时(ms)</string>
-    <string name="sniper_delay">狙击延时(ms)</string>
-    <string name="btn_copy_log">复制日志</string>
-    <string name="arsenal">武器库</string>
-    <string name="action_permission">开启权限</string>
 </resources>
